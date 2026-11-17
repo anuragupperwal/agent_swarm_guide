@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>How Multi-Agent Systems Fail · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="../index.html">Loop <span>→</span> Swarm</a>
+    <div class="crumbs"><a href="../index.html">Guide</a> · Part 4 · Multi-agent · Chapter 19</div>
+    <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+  </div>
+</header>
+
+<div class="page has-toc">
+<main class="chapter">
+
+  <header class="ch-head">
+    <p class="eyebrow"><b>Part 4 · Multi-agent systems</b> · Chapter 19 · Level L4</p>
+    <h1>How multi-agent systems fail</h1>
+    <p class="lede">A single agent fails in one place, and you can read its trace top to bottom. A tree of agents fails <em>between</em> places: a constraint lost in a hand-down, a confident “Done.” that hides nothing done, three agents agreeing on the same wrong answer. This chapter is a catalog of those failures, the fingerprint each one leaves in a trace, and the test that catches it before production does.</p>
+    <ul class="ch-meta">
+      <li><b>45 min</b> reading</li>
+      <li>Builds on: <b>Ch 11, 13, 16, 17</b></li>
+      <li>Your project: <b>Stage 2–6 break-it lists</b></li>
+    </ul>
+    <ol class="where" aria-label="Where this chapter sits in the guide">
+      <li class="past"><span>Part 1</span>Foundations</li>
+      <li class="past"><span>Part 2</span>Thinking &amp; memory</li>
+      <li class="past"><span>Part 3</span>The harness</li>
+      <li class="here"><span>Part 4</span>Multi-agent</li>
+      <li><span>Part 5</span>Together</li>
+    </ol>
+  </header>
+
+  <details class="toc-mobile"><summary>In this chapter</summary><div data-toc></div></details>
+
+  <div class="box predict">
+    <span class="box-label">Predict first · 10 min</span>
+    <p>Write answers in <code>docs/LEARNING_NOTES.md</code> under “Guide ch19”. Tag each one <em>sure</em> or <em>guess</em>. Don't read on until you're done.</p>
+    <ol>
+      <li>A run finishes under budget, every agent reports success, and the final answer reads confidently. Name three ways it could still be a failure.</li>
+      <li>Rank these by how often you think they cause multi-agent failures: (a) a bad system design or specification, (b) agents misunderstanding each other, (c) weak checking of results at the end.</li>
+      <li>A child agent returns the single word “Done.” with status <code>success</code>. What should your harness do, and which part of your code should decide?</li>
+    </ol>
+  </div>
+
+  <h2 id="why-different" data-short="Why it's different">Why multi-agent failure is different</h2>
+  <p>Everything that goes wrong with one agent (Chapter 11) can still go wrong with many. Multi-agent systems add four properties that make failures worse:</p>
+  <ul>
+    <li><strong>Errors cross boundaries.</strong> A child's mistake becomes the parent's input. The parent has no way to see how the child produced it, only what it returned.</li>
+    <li><strong>Failure looks like success.</strong> A child that returns a wrong answer with status <code>success</code> is far more dangerous than one that crashes. Crashes are caught by code. Confident mistakes are passed on.</li>
+    <li><strong>Errors are correlated.</strong> Agents built on one model share its blind spots. Adding agents adds chances to fail, but not independent chances to catch failures (Chapter 17).</li>
+    <li><strong>The trace is a tree.</strong> Finding the cause means walking across agents, not reading down one list. Without good tracing (Chapter 13), most multi-agent failures can't be diagnosed at all.</li>
+  </ul>
+  <p>The first property has simple arithmetic behind it. If a result depends on <em>n</em> steps or agents in sequence, and each succeeds with probability <em>p</em>, the whole chain succeeds with probability <em>p</em><sup><em>n</em></sup> (assuming independent failures):</p>
+  <div class="formula">
+    P(chain succeeds) = p<sup>n</sup><br>
+    p = 0.95: &nbsp; n = 5 → 0.77 &nbsp;· &nbsp;n = 10 → 0.60 &nbsp;· &nbsp;n = 20 → 0.36<br>
+    <span class="muted">with a check that catches 60% of errors before they pass on: p<sub>eff</sub> = 0.95 + 0.05·0.6 = 0.98 → n = 10 → 0.82</span>
+  </div>
+  <p>Read the last line carefully, because it's the argument for the whole second half of this chapter. You can't make each agent perfect. You <em>can</em> put checks between agents, and even an imperfect check changes the compounding a lot.</p>
+
+  <h2 id="mast" data-short="MAST taxonomy">A map of failures: the MAST taxonomy</h2>
+  <p>Cemri et al. (2025) studied why multi-agent LLM systems fail. They collected execution traces from several open-source multi-agent frameworks, had human experts annotate what went wrong, and built the <strong>Multi-Agent System Failure Taxonomy</strong> (MAST). They then used an LLM annotator, checked against human labels, to scale the analysis. MAST has 14 failure modes grouped into three categories:</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 310" role="img" aria-label="The MAST taxonomy in three columns. Category 1, specification and system design: disobey task specification, disobey role specification, step repetition, loss of conversation history, unaware of stop conditions. Category 2, inter-agent misalignment: conversation reset, fails to ask for clarification, task derailment, information withholding, ignored other agent's input, reasoning-action mismatch. Category 3, verification and termination: premature termination, no or incomplete verification, incorrect verification.">
+        <rect class="n-violet" x="8" y="8" width="228" height="48" rx="6"/>
+        <text class="t-caps t-violet" x="122" y="26" text-anchor="middle">FC1</text>
+        <text class="t-b" x="122" y="46" text-anchor="middle">Specification &amp; design</text>
+        <rect class="n-amber" x="246" y="8" width="228" height="48" rx="6"/>
+        <text class="t-caps t-amber" x="360" y="26" text-anchor="middle">FC2</text>
+        <text class="t-b" x="360" y="46" text-anchor="middle">Inter-agent misalignment</text>
+        <rect class="n-red" x="484" y="8" width="228" height="48" rx="6"/>
+        <text class="t-caps t-red" x="598" y="26" text-anchor="middle">FC3</text>
+        <text class="t-b" x="598" y="46" text-anchor="middle">Verification &amp; termination</text>
+
+        <rect class="n-plain" x="8" y="70" width="228" height="26" rx="4"/><text class="t-sm" x="18" y="87">1.1 disobey task specification</text>
+        <rect class="n-plain" x="8" y="102" width="228" height="26" rx="4"/><text class="t-sm" x="18" y="119">1.2 disobey role specification</text>
+        <rect class="n-plain" x="8" y="134" width="228" height="26" rx="4"/><text class="t-sm" x="18" y="151">1.3 step repetition</text>
+        <rect class="n-plain" x="8" y="166" width="228" height="26" rx="4"/><text class="t-sm" x="18" y="183">1.4 loss of conversation history</text>
+        <rect class="n-plain" x="8" y="198" width="228" height="26" rx="4"/><text class="t-sm" x="18" y="215">1.5 unaware of stop conditions</text>
+
+        <rect class="n-plain" x="246" y="70" width="228" height="26" rx="4"/><text class="t-sm" x="256" y="87">2.1 conversation reset</text>
+        <rect class="n-plain" x="246" y="102" width="228" height="26" rx="4"/><text class="t-sm" x="256" y="119">2.2 fails to ask for clarification</text>
+        <rect class="n-plain" x="246" y="134" width="228" height="26" rx="4"/><text class="t-sm" x="256" y="151">2.3 task derailment</text>
+        <rect class="n-plain" x="246" y="166" width="228" height="26" rx="4"/><text class="t-sm" x="256" y="183">2.4 information withholding</text>
+        <rect class="n-plain" x="246" y="198" width="228" height="26" rx="4"/><text class="t-sm" x="256" y="215">2.5 ignored other agent's input</text>
+        <rect class="n-plain" x="246" y="230" width="228" height="26" rx="4"/><text class="t-sm" x="256" y="247">2.6 reasoning–action mismatch</text>
+
+        <rect class="n-plain" x="484" y="70" width="228" height="26" rx="4"/><text class="t-sm" x="494" y="87">3.1 premature termination</text>
+        <rect class="n-plain" x="484" y="102" width="228" height="26" rx="4"/><text class="t-sm" x="494" y="119">3.2 no or incomplete verification</text>
+        <rect class="n-plain" x="484" y="134" width="228" height="26" rx="4"/><text class="t-sm" x="494" y="151">3.3 incorrect verification</text>
+
+        <text class="t-xs t-muted" x="122" y="276" text-anchor="middle">starts in: the design and the prompts</text>
+        <text class="t-xs t-muted" x="360" y="276" text-anchor="middle">starts in: talk between agents</text>
+        <text class="t-xs t-muted" x="598" y="276" text-anchor="middle">starts in: checking and stopping</text>
+        <text class="t-xs t-muted" x="8" y="302">Labels paraphrased from Cemri et al. (2025). Check the paper for exact names and definitions.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 19.1</b>MAST's three categories and fourteen modes. Use it as a vocabulary: when a run fails, name the mode before you try to fix it. Most of the column-3 failures are things a harness can check without calling a model.</figcaption>
+  </figure>
+
+  <dl class="defs">
+    <dt>FC1 · Specification and system design</dt><dd>The failure was built in before the run started: vague task descriptions, unclear roles, no defined stopping condition, a context that drops history. Agents “disobey” instructions that were ambiguous to begin with.</dd>
+    <dt>FC2 · Inter-agent misalignment</dt><dd>The parts work on their own but not together. An agent doesn't ask when it should, holds back information another agent needed, ignores a peer's input, drifts off task, or says one thing in its reasoning and does another.</dd>
+    <dt>FC3 · Verification and termination</dt><dd>The run stops too early, or it stops after checking nothing, or it checks the wrong thing. This is the column your harness can most directly fix.</dd>
+  </dl>
+  <p>Three findings from the paper are worth remembering. Treat the details as approximate and read the paper for the numbers. First, failures were spread across all three categories. No single category explained most of them, so no single fix will either. Second, many failures trace back to <em>system design</em>, not to the model being weak. Third, the authors tried straightforward interventions, such as clearer role prompts and changes to how agents were organized. These helped somewhat but left most failures in place. The authors argue that more structural changes are needed, which is exactly what a harness is for.</p>
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p>Your Predict ranking was probably a guess, and that's fine. The lesson is that “use a smarter model” is rarely the fix. Specification, coordination and verification are <em>engineering</em> problems, and most of them live in code you write.</p>
+  </div>
+
+  <h2 id="catalog">A catalog of swarm failures</h2>
+  <p>Each failure below gets the same four parts: the <strong>mechanism</strong> (why it happens), the <strong>signal</strong> (what it looks like in a trace), a <strong>test</strong> (how to reproduce it with a fake model), and the closest <strong>MAST</strong> mode, where there is one. Some failures are harness-level problems that MAST, which studies agent behavior, doesn't name.</p>
+
+  <h3>1 · Runaway spawning</h3>
+  <dl class="defs">
+    <dt>Mechanism</dt><dd>Each planner decides independently that its task is “big enough to split”. Nobody sees the whole tree. With fan-out <em>f</em> and depth <em>d</em>, the tree has 1 + <em>f</em> + <em>f</em>² + … + <em>f</em><sup><em>d</em></sup> agents (Chapter 16).</dd>
+    <dt>Signal</dt><dd>The spawn rate rises over time instead of falling. The tree keeps getting deeper. Leaf tasks are near-copies of their parents' tasks.</dd>
+    <dt>Test</dt><dd>A fake model that <em>always</em> proposes three subtasks. Assert that the total number of agents never exceeds the limit, and that every rejected spawn is a logged event, not an exception.</dd>
+    <dt>MAST</dt><dd>Closest is 1.5 (unaware of stop conditions). Mostly a harness failure: the limit was missing or not enforced.</dd>
+  </dl>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 256" role="img" aria-label="A spawn tree with fan-out 3 and depth 3 proposes 1 plus 3 plus 9 plus 27, which is 40 agents. With max_agents set to 20, the root, its 3 children, 9 grandchildren and the first 7 great-grandchildren are created. The remaining 20 proposed agents are rejected and logged as events rather than crashing the run.">
+        <text class="t-sm" x="16" y="18">fan-out 3, depth 3: 1 + 3 + 9 + 27 = 40 proposed · max_agents = 20</text>
+        <line class="e-accent" x1="355" y1="49" x2="130" y2="92"/><line class="e-accent" x1="355" y1="49" x2="355" y2="92"/><line class="e-accent" x1="355" y1="49" x2="580" y2="92"/>
+        <line class="e-accent" x1="130" y1="108" x2="55" y2="153"/><line class="e-accent" x1="130" y1="108" x2="130" y2="153"/><line class="e-accent" x1="130" y1="108" x2="205" y2="153"/>
+        <line class="e-accent" x1="355" y1="108" x2="280" y2="153"/><line class="e-accent" x1="355" y1="108" x2="355" y2="153"/><line class="e-accent" x1="355" y1="108" x2="430" y2="153"/>
+        <line class="e-accent" x1="580" y1="108" x2="505" y2="153"/><line class="e-accent" x1="580" y1="108" x2="580" y2="153"/><line class="e-accent" x1="580" y1="108" x2="655" y2="153"/>
+
+        <line class="e-accent" x1="55" y1="167" x2="30" y2="214"/><line class="e-accent" x1="55" y1="167" x2="55" y2="214"/><line class="e-accent" x1="55" y1="167" x2="80" y2="214"/>
+        <line class="e-accent" x1="130" y1="167" x2="105" y2="214"/><line class="e-accent" x1="130" y1="167" x2="130" y2="214"/><line class="e-accent" x1="130" y1="167" x2="155" y2="214"/>
+        <line class="e-accent" x1="205" y1="167" x2="180" y2="214"/><line class="e-red e-dash" x1="205" y1="167" x2="205" y2="214"/><line class="e-red e-dash" x1="205" y1="167" x2="230" y2="214"/>
+        <line class="e-red e-dash" x1="280" y1="167" x2="255" y2="214"/><line class="e-red e-dash" x1="280" y1="167" x2="280" y2="214"/><line class="e-red e-dash" x1="280" y1="167" x2="305" y2="214"/>
+        <line class="e-red e-dash" x1="355" y1="167" x2="330" y2="214"/><line class="e-red e-dash" x1="355" y1="167" x2="355" y2="214"/><line class="e-red e-dash" x1="355" y1="167" x2="380" y2="214"/>
+        <line class="e-red e-dash" x1="430" y1="167" x2="405" y2="214"/><line class="e-red e-dash" x1="430" y1="167" x2="430" y2="214"/><line class="e-red e-dash" x1="430" y1="167" x2="455" y2="214"/>
+        <line class="e-red e-dash" x1="505" y1="167" x2="480" y2="214"/><line class="e-red e-dash" x1="505" y1="167" x2="505" y2="214"/><line class="e-red e-dash" x1="505" y1="167" x2="530" y2="214"/>
+        <line class="e-red e-dash" x1="580" y1="167" x2="555" y2="214"/><line class="e-red e-dash" x1="580" y1="167" x2="580" y2="214"/><line class="e-red e-dash" x1="580" y1="167" x2="605" y2="214"/>
+        <line class="e-red e-dash" x1="655" y1="167" x2="630" y2="214"/><line class="e-red e-dash" x1="655" y1="167" x2="655" y2="214"/><line class="e-red e-dash" x1="655" y1="167" x2="680" y2="214"/>
+
+        <circle class="n-accent n-thick" cx="355" cy="40" r="9"/>
+        <circle class="n-accent" cx="130" cy="100" r="8"/><circle class="n-accent" cx="355" cy="100" r="8"/><circle class="n-accent" cx="580" cy="100" r="8"/>
+        <circle class="n-accent" cx="55" cy="160" r="7"/><circle class="n-accent" cx="130" cy="160" r="7"/><circle class="n-accent" cx="205" cy="160" r="7"/>
+        <circle class="n-accent" cx="280" cy="160" r="7"/><circle class="n-accent" cx="355" cy="160" r="7"/><circle class="n-accent" cx="430" cy="160" r="7"/>
+        <circle class="n-accent" cx="505" cy="160" r="7"/><circle class="n-accent" cx="580" cy="160" r="7"/><circle class="n-accent" cx="655" cy="160" r="7"/>
+
+        <circle class="n-accent" cx="30" cy="220" r="6"/><circle class="n-accent" cx="55" cy="220" r="6"/><circle class="n-accent" cx="80" cy="220" r="6"/>
+        <circle class="n-accent" cx="105" cy="220" r="6"/><circle class="n-accent" cx="130" cy="220" r="6"/><circle class="n-accent" cx="155" cy="220" r="6"/>
+        <circle class="n-accent" cx="180" cy="220" r="6"/><circle class="n-red" cx="205" cy="220" r="6"/><circle class="n-red" cx="230" cy="220" r="6"/>
+        <circle class="n-red" cx="255" cy="220" r="6"/><circle class="n-red" cx="280" cy="220" r="6"/><circle class="n-red" cx="305" cy="220" r="6"/>
+        <circle class="n-red" cx="330" cy="220" r="6"/><circle class="n-red" cx="355" cy="220" r="6"/><circle class="n-red" cx="380" cy="220" r="6"/>
+        <circle class="n-red" cx="405" cy="220" r="6"/><circle class="n-red" cx="430" cy="220" r="6"/><circle class="n-red" cx="455" cy="220" r="6"/>
+        <circle class="n-red" cx="480" cy="220" r="6"/><circle class="n-red" cx="505" cy="220" r="6"/><circle class="n-red" cx="530" cy="220" r="6"/>
+        <circle class="n-red" cx="555" cy="220" r="6"/><circle class="n-red" cx="580" cy="220" r="6"/><circle class="n-red" cx="605" cy="220" r="6"/>
+        <circle class="n-red" cx="630" cy="220" r="6"/><circle class="n-red" cx="655" cy="220" r="6"/><circle class="n-red" cx="680" cy="220" r="6"/>
+
+        <text class="t-xs t-muted" x="704" y="44">d=0: 1</text>
+        <text class="t-xs t-muted" x="704" y="104">d=1: 3</text>
+        <text class="t-xs t-muted" x="704" y="164">d=2: 9</text>
+        <text class="t-xs t-muted" x="704" y="224">d=3: 27</text>
+        <text class="t-xs t-accent" x="105" y="246" text-anchor="middle">7 created (total 20)</text>
+        <text class="t-xs t-red" x="442" y="246" text-anchor="middle">20 rejected · logged as events, not crashes</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 19.2</b>Runaway spawning, contained. With no limit, this planner would create 40 agents, and one more level would make 121. With <code>max_agents = 20</code>, the spawn that would create the 21st agent is rejected, and so is every one after it. Notice <em>which</em> agents got cut: whole branches on the right have no workers at all. A global limit alone can leave some subtasks unstaffed.</figcaption>
+  </figure>
+
+  <h3>2 · Duplicate work</h3>
+  <div class="trace">
+    <div class="trace-title">Trace · two children with overlapping scopes</div>
+    <div class="tr tr-sys"><span class="tr-role">root</span><div class="tr-body">spawn child-1: "Research EU rules for AI systems"
+spawn child-2: "Research AI regulation in Europe"</div></div>
+    <div class="tr tr-act"><span class="tr-role">child-1</span><div class="tr-body">web_search(query="EU AI Act obligations")</div></div>
+    <div class="tr tr-act"><span class="tr-role">child-2</span><div class="tr-body">web_search(query="EU AI Act requirements")</div></div>
+    <div class="tr tr-obs"><span class="tr-role">results</span><div class="tr-body">both fetch the same 4 of their top 5 URLs</div></div>
+    <div class="tr tr-sys"><span class="tr-role">aggregate</span><div class="tr-body">11 findings, 9 near-duplicates · about twice the tokens for one subtask's worth of information</div></div>
+  </div>
+  <dl class="defs">
+    <dt>Mechanism</dt><dd>The planner wrote two subtasks that look different but mean the same thing. Neither child can see the other.</dd>
+    <dt>Signal</dt><dd>Siblings make tool calls with near-identical arguments. Their results cite the same sources. The aggregator throws away a large share of findings as duplicates.</dd>
+    <dt>Test</dt><dd>Give the fake planner two overlapping subtasks. Assert that your semantic plan check flags the overlap, or that the claim store makes the second child skip the shared sources.</dd>
+    <dt>MAST</dt><dd>1.1 at the planner level (a specification problem), and 2.4 if a sibling found something and didn't share it.</dd>
+  </dl>
+
+  <h3>3 · The telephone game</h3>
+  <p>Chapter 16 introduced this failure: every hand-down is a rewrite. A parent model doesn't forward the task, it <em>summarizes</em> it into a subtask, and summaries are lossy. The parts that are easiest to lose are the constraints, because they aren't the main point of any one subtask.</p>
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 232" role="img" aria-label="Three boxes show the task at each hop. From the user to the root, four constraints are present: compare three vendors' SLAs, public docs only, output a table, EU data residency. From root to child, EU data residency has been dropped. From child to grandchild, the task has narrowed to find Vendor B's SLA, and public docs only, output a table and EU data residency are all gone.">
+        <defs>
+          <marker id="f1903-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-group" x="16" y="30" width="208" height="150" rx="8"/>
+        <text class="t-b" x="120" y="52" text-anchor="middle">user → root</text>
+        <rect class="n-accent" x="30" y="66" width="180" height="22" rx="4"/><text class="t-sm" x="40" y="81">compare 3 vendors' SLAs</text>
+        <rect class="n-accent" x="30" y="94" width="180" height="22" rx="4"/><text class="t-sm" x="40" y="109">public docs only</text>
+        <rect class="n-accent" x="30" y="122" width="180" height="22" rx="4"/><text class="t-sm" x="40" y="137">output: a table</text>
+        <rect class="n-accent" x="30" y="150" width="180" height="22" rx="4"/><text class="t-sm" x="40" y="165">EU data residency</text>
+
+        <line x1="226" y1="105" x2="252" y2="105" marker-end="url(#f1903-ah)"/>
+
+        <rect class="n-group" x="256" y="30" width="208" height="150" rx="8"/>
+        <text class="t-b" x="360" y="52" text-anchor="middle">root → child</text>
+        <rect class="n-accent" x="270" y="66" width="180" height="22" rx="4"/><text class="t-sm" x="280" y="81">compare 3 vendors' SLAs</text>
+        <rect class="n-accent" x="270" y="94" width="180" height="22" rx="4"/><text class="t-sm" x="280" y="109">public docs only</text>
+        <rect class="n-accent" x="270" y="122" width="180" height="22" rx="4"/><text class="t-sm" x="280" y="137">output: a table</text>
+        <rect class="n-ghost" x="270" y="150" width="180" height="22" rx="4"/><text class="t-sm t-red" x="280" y="165">✗ EU data residency</text>
+
+        <line x1="466" y1="105" x2="492" y2="105" marker-end="url(#f1903-ah)"/>
+
+        <rect class="n-group" x="496" y="30" width="208" height="150" rx="8"/>
+        <text class="t-b" x="600" y="52" text-anchor="middle">child → grandchild</text>
+        <rect class="n-amber" x="510" y="66" width="180" height="22" rx="4"/><text class="t-sm" x="520" y="81">find Vendor B's SLA</text>
+        <rect class="n-ghost" x="510" y="94" width="180" height="22" rx="4"/><text class="t-sm t-red" x="520" y="109">✗ public docs only</text>
+        <rect class="n-ghost" x="510" y="122" width="180" height="22" rx="4"/><text class="t-sm t-red" x="520" y="137">✗ output: a table</text>
+        <rect class="n-ghost" x="510" y="150" width="180" height="22" rx="4"/><text class="t-sm t-red" x="520" y="165">✗ EU data residency</text>
+
+        <text class="t-xs t-muted" x="120" y="198" text-anchor="middle">4 of 4 constraints</text>
+        <text class="t-xs t-muted" x="360" y="198" text-anchor="middle">3 of 4</text>
+        <text class="t-xs t-muted" x="600" y="198" text-anchor="middle">1 of 4, and narrowed</text>
+        <text class="t-sm t-muted" x="360" y="224" text-anchor="middle">each hop rewrites the task in fewer words; constraints are the first to go</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 19.3</b>Constraints leaking out over two hand-downs. The grandchild does its narrow job well: it finds Vendor B's SLA, perhaps from a forum post or a leaked PDF, because nobody told it “public docs only”. Every agent did what it was asked. The <em>system</em> still failed the user.</figcaption>
+  </figure>
+  <dl class="defs">
+    <dt>Mechanism</dt><dd>Each parent writes a child's task in its own words. Models compress, and a constraint that looks unrelated to the subtask looks safe to drop. Two hops compound the loss.</dd>
+    <dt>Signal</dt><dd>Compare each child's task text with the root task's constraint list. A constraint present at the root and missing at a leaf is the fingerprint. You can only see this if the trace records the exact task each agent received.</dd>
+    <dt>Test</dt><dd>Plant a “canary” constraint in the root task, for example “every finding must include a source URL”. Run a depth-2 tree with a fake model that paraphrases. Assert that the constraint reaches every leaf, and that every leaf result obeys it.</dd>
+    <dt>MAST</dt><dd>1.1 (disobey task specification) at the leaf, caused by 2.4 (information withholding) at the parent.</dd>
+  </dl>
+
+  <h3>4 · Groupthink</h3>
+  <p>Debate and voting (Chapters 17 and 18) are supposed to catch errors. They can also manufacture agreement. When agents see each other's answers, a minority with the right answer can give way to a majority with the wrong one.</p>
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 216" role="img" aria-label="Three agents answer whether a 2023 policy is still in force, over three rounds. Agents A and B answer yes in every round, citing an outdated 2023 page. Agent C answers no in rounds 1 and 2, citing a 2025 update, then switches to yes in round 3 with no new evidence. The final answer is yes, three of three agree, confident and wrong.">
+        <defs>
+          <marker id="f1904-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-caps t-muted" x="170" y="28" text-anchor="middle">round 1 · alone</text>
+        <text class="t-caps t-muted" x="330" y="28" text-anchor="middle">round 2 · sees peers</text>
+        <text class="t-caps t-muted" x="490" y="28" text-anchor="middle">round 3 · sees peers</text>
+
+        <text class="t-b" x="16" y="69">agent A</text>
+        <text class="t-b" x="16" y="121">agent B</text>
+        <text class="t-b" x="16" y="173">agent C</text>
+
+        <rect class="n-red" x="100" y="44" width="140" height="40" rx="5"/><text class="t-sm" x="170" y="61" text-anchor="middle">yes</text><text class="t-xs t-muted" x="170" y="76" text-anchor="middle">cites 2023 page</text>
+        <rect class="n-red" x="260" y="44" width="140" height="40" rx="5"/><text class="t-sm" x="330" y="61" text-anchor="middle">yes</text><text class="t-xs t-muted" x="330" y="76" text-anchor="middle">same source</text>
+        <rect class="n-red" x="420" y="44" width="140" height="40" rx="5"/><text class="t-sm" x="490" y="61" text-anchor="middle">yes</text><text class="t-xs t-muted" x="490" y="76" text-anchor="middle">same source</text>
+
+        <rect class="n-red" x="100" y="96" width="140" height="40" rx="5"/><text class="t-sm" x="170" y="113" text-anchor="middle">yes</text><text class="t-xs t-muted" x="170" y="128" text-anchor="middle">cites 2023 page</text>
+        <rect class="n-red" x="260" y="96" width="140" height="40" rx="5"/><text class="t-sm" x="330" y="113" text-anchor="middle">yes</text><text class="t-xs t-muted" x="330" y="128" text-anchor="middle">agrees with A</text>
+        <rect class="n-red" x="420" y="96" width="140" height="40" rx="5"/><text class="t-sm" x="490" y="113" text-anchor="middle">yes</text><text class="t-xs t-muted" x="490" y="128" text-anchor="middle">agrees with A and C</text>
+
+        <rect class="n-accent" x="100" y="148" width="140" height="40" rx="5"/><text class="t-sm" x="170" y="165" text-anchor="middle">no</text><text class="t-xs t-muted" x="170" y="180" text-anchor="middle">cites 2025 update</text>
+        <rect class="n-accent" x="260" y="148" width="140" height="40" rx="5"/><text class="t-sm" x="330" y="165" text-anchor="middle">no</text><text class="t-xs t-muted" x="330" y="180" text-anchor="middle">but 2 of 3 say yes</text>
+        <rect class="n-red n-thick" x="420" y="148" width="140" height="40" rx="5"/><text class="t-sm" x="490" y="165" text-anchor="middle">yes</text><text class="t-xs t-red" x="490" y="180" text-anchor="middle">flips · no new evidence</text>
+
+        <line class="e-muted" x1="242" y1="64" x2="258" y2="64" marker-end="url(#f1904-ah)"/><line class="e-muted" x1="402" y1="64" x2="418" y2="64" marker-end="url(#f1904-ah)"/>
+        <line class="e-muted" x1="242" y1="116" x2="258" y2="116" marker-end="url(#f1904-ah)"/><line class="e-muted" x1="402" y1="116" x2="418" y2="116" marker-end="url(#f1904-ah)"/>
+        <line class="e-muted" x1="242" y1="168" x2="258" y2="168" marker-end="url(#f1904-ah)"/><line class="e-muted" x1="402" y1="168" x2="418" y2="168" marker-end="url(#f1904-ah)"/>
+        <line class="e-muted" x1="562" y1="116" x2="590" y2="116" marker-end="url(#f1904-ah)"/>
+
+        <rect class="n-red n-thick" x="592" y="44" width="118" height="144" rx="6"/>
+        <text class="t-b t-red" x="651" y="100" text-anchor="middle">final: yes</text>
+        <text class="t-sm" x="651" y="122" text-anchor="middle">3 of 3 agree</text>
+        <text class="t-xs t-muted" x="651" y="142" text-anchor="middle">confident · wrong</text>
+        <text class="t-xs t-muted" x="330" y="208" text-anchor="middle">between rounds 2 and 3, no agent made a tool call or added a source</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 19.4</b>Three agents, three rounds, one wrong consensus. Red cells hold the wrong answer. Agent C had the better evidence and gave it up because of the vote count, not because of anything new. A judge that counts votes calls this a strong result. A judge that reads the evidence sees one source cited twice and a newer source ignored.</figcaption>
+  </figure>
+  <dl class="defs">
+    <dt>Mechanism</dt><dd>Agents that share a model share its errors, so the majority is often wrong in the same way. Models also tend to defer to views put to them: Sharma et al. (2023) document sycophancy toward users. It's plausible, though less studied, that a similar pull applies to peer agents' messages.</dd>
+    <dt>Signal</dt><dd>An agent changes its answer with no new tool call, source or argument in between. Agreement rises across rounds while the number of distinct sources stays flat.</dd>
+    <dt>Test</dt><dd>Give one agent a fixture with the correct, newer document and two agents a planted outdated one. Assert that the final answer follows the evidence, not the headcount.</dd>
+    <dt>MAST</dt><dd>2.5 (ignored other agent's input) applies to the majority. 3.3 (incorrect verification) applies if a vote count was treated as a check.</dd>
+  </dl>
+
+  <h3>5 · Cascading hallucination</h3>
+  <div class="trace">
+    <div class="trace-title">Trace · one invented number becomes two citations</div>
+    <div class="tr tr-act"><span class="tr-role">child-2</span><div class="tr-body">write_finding(text="Vendor B uptime was 99.99% in 2025", source=None)</div></div>
+    <div class="tr tr-sys"><span class="tr-role">board</span><div class="tr-body">finding f-7 · author child-2 · source: none · accepted (no check)</div></div>
+    <div class="tr tr-act"><span class="tr-role">child-3</span><div class="tr-body">read_board() → uses f-7
+"Since B's uptime is 99.99%, its penalty clause rarely applies."</div></div>
+    <div class="tr tr-final"><span class="tr-role">root</span><div class="tr-body">"Vendor B: 99.99% uptime, confirmed by two independent research threads."</div></div>
+  </div>
+  <dl class="defs">
+    <dt>Mechanism</dt><dd>A child invents a plausible fact. Shared state (a blackboard, a summary, a parent's context) spreads it. Each agent that builds on it adds apparent support, and the aggregator mistakes repetition for corroboration.</dd>
+    <dt>Signal</dt><dd>Findings with no source. Two citations for one claim that both trace back to the same agent. A claim whose cited source doesn't contain it.</dd>
+    <dt>Test</dt><dd>A fake child that writes one finding with <code>source=None</code> and one with a source that doesn't mention the claim. Assert that the aggregator rejects or flags both, and that the final answer doesn't contain either claim as fact.</dd>
+    <dt>MAST</dt><dd>3.2 (no or incomplete verification). The invented fact itself is a single-agent error. Letting it spread is a system error.</dd>
+  </dl>
+  <div class="box pitfall">
+    <span class="box-label">Same path, worse payload</span>
+    <p>Prompt injection travels the same way (Chapter 12). A child reads a web page that contains instructions, and writes them into its result. Its parent reads that result as trusted text. Anything that can carry a hallucination from one agent to another can carry an attack. Provenance helps with both, because a finding that records <em>where it came from</em> can be treated with the trust level of its source.</p>
+  </div>
+
+  <h3>6 · Premature termination and false success</h3>
+  <p>This is your Predict question 3.</p>
+  <div class="trace">
+    <div class="trace-title">Trace · status says success, content says otherwise</div>
+    <div class="tr tr-sys"><span class="tr-role">task</span><div class="tr-body">child-4: "Extract the penalty clauses from the 3 SLA PDFs.
+Return a list of {vendor, clause, page}."</div></div>
+    <div class="tr tr-act"><span class="tr-role">child-4</span><div class="tr-body">read_pdf(path="vendor_a.pdf")</div></div>
+    <div class="tr tr-obs"><span class="tr-role">tool</span><div class="tr-body">38 pages · truncated to the first 8,000 tokens</div></div>
+    <div class="tr tr-final"><span class="tr-role">child-4</span><div class="tr-body">"Done. The penalty clauses have been extracted and summarized."  status=success</div></div>
+    <div class="tr tr-sys"><span class="tr-role">contract</span><div class="tr-body">clauses=[] (required, empty) · files read: 1 of 3 → <span class="hl">reject: status success, content missing</span></div></div>
+  </div>
+  <dl class="defs">
+    <dt>Mechanism</dt><dd>The model can't tell “I finished” from “I wrote words that sound finished”. Truncated tool output, a tight step budget or an unclear stopping rule all push it to wrap up early. The status field is just more model output, so it can't be trusted on its own.</dd>
+    <dt>Signal</dt><dd>A very short result, empty required fields, fewer tool calls than inputs (1 call, 3 files), or success reported straight after a truncation or error observation.</dd>
+    <dt>Test</dt><dd>A fake child that returns exactly <code>"Done."</code> with status success. Assert that the harness records the result as failed or unverified, never as success, and that the parent's next step sees that status.</dd>
+    <dt>MAST</dt><dd>3.1 (premature termination) plus 3.2 (no or incomplete verification).</dd>
+  </dl>
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p>A child's status is a <em>claim</em>. The harness turns it into a fact by checking the result against the return contract, with code, before the parent sees it. That's the “model proposes, harness disposes” rule (Chapter 8) applied to results instead of actions.</p>
+  </div>
+
+  <h3>7 · Never terminating</h3>
+  <div class="trace">
+    <div class="trace-title">Trace · a writer and a reviewer with no exit</div>
+    <div class="tr tr-act"><span class="tr-role">reviewer · r1</span><div class="tr-body">"Section 2 needs more detail on pricing."</div></div>
+    <div class="tr tr-obs"><span class="tr-role">writer · r1</span><div class="tr-body">revises section 2 (+420 tokens)</div></div>
+    <div class="tr tr-act"><span class="tr-role">reviewer · r2</span><div class="tr-body">"Section 2 is now too long. Tighten it."</div></div>
+    <div class="tr tr-obs"><span class="tr-role">writer · r2</span><div class="tr-body">revises section 2 (−380 tokens)</div></div>
+    <div class="tr tr-act"><span class="tr-role">reviewer · r3</span><div class="tr-body">"Section 2 could use more pricing detail."</div></div>
+    <div class="tr tr-sys"><span class="tr-role">harness · r9</span><div class="tr-body">change between revisions: 2% · budget used: 70% · acceptance criterion: <span class="hl">none defined</span></div></div>
+  </div>
+  <dl class="defs">
+    <dt>Mechanism</dt><dd>A reviewer prompted to find problems will always find one. With no acceptance criterion agreed in advance, “good enough” never arrives, and the loop runs until a budget stops it.</dd>
+    <dt>Signal</dt><dd>The round counter rises while the difference between versions shrinks. The same critique comes back in different words. The output oscillates (longer, shorter, longer).</dd>
+    <dt>Test</dt><dd>A fake reviewer that always asks for one more change. Assert that the loop stops at the round limit or when the change between versions falls below a threshold, and that it returns the best version so far with a reason for stopping.</dd>
+    <dt>MAST</dt><dd>1.3 (step repetition) and 1.5 (unaware of stop conditions).</dd>
+  </dl>
+
+  <h3>8 · Cost explosion</h3>
+  <p>Chapter 1 showed that one agent's input tokens grow with the square of its step count, because each call re-sends the whole history. With <em>n</em> steps, a starting context of <em>b</em> tokens and growth of <em>a</em> tokens per step, the total is <em>n·b</em> + <em>a</em>·<em>n</em>(<em>n</em>−1)/2. Now let agents broadcast to each other. Every message an agent posts lands in every other agent's context, so it increases <em>a</em> for all of them:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Agents</th><th>Growth per step, own</th><th>Growth per step, from peers (500 tokens each)</th><th>Input tokens per agent, 20 steps</th><th>Input tokens, whole run</th></tr></thead>
+      <tbody>
+        <tr><td>10, no broadcast</td><td>4k</td><td>0</td><td>0.80M</td><td>8.0M</td></tr>
+        <tr><td>10, broadcast</td><td>4k</td><td>9 × 500 = 4.5k</td><td>1.66M</td><td>16.6M</td></tr>
+        <tr><td>20, no broadcast</td><td>4k</td><td>0</td><td>0.80M</td><td>16.0M</td></tr>
+        <tr><td>20, broadcast</td><td>4k</td><td>19 × 500 = 9.5k</td><td>2.61M</td><td>52.1M</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="small muted">Assumes b = 2k tokens and n = 20 steps. Per agent: 20·2k + a·190. For example, a = 13.5k gives 40k + 2,565k ≈ 2.61M.</p>
+  <dl class="defs">
+    <dt>Mechanism</dt><dd>Doubling the agents doubles the run without broadcast, but more than triples it with broadcast, because total peer traffic grows with <em>n</em>(<em>n</em>−1). Nothing here is a bug. Every agent behaves correctly, and the bill is still the failure.</dd>
+    <dt>Signal</dt><dd>Input tokens per step keep rising, and the share of each context taken by other agents' messages keeps growing. Cost per useful finding rises with the number of agents.</dd>
+    <dt>Test</dt><dd>Run the same fake task with 2, 4 and 8 agents. Assert that total tokens stay within the budget pool, and plot tokens against agents to see the curve's shape.</dd>
+    <dt>MAST</dt><dd>Not a MAST mode. It's a resource failure, which is why budgets live in the harness (Chapter 11).</dd>
+  </dl>
+
+  <h3>9 · Deadlock</h3>
+  <div class="trace">
+    <div class="trace-title">Trace · two agents waiting on each other (timestamps in UTC)</div>
+    <div class="tr tr-act"><span class="tr-role">10:02:11</span><div class="tr-body">agent-3 → agent-5  request(id=81) "Send me your vendor list."</div></div>
+    <div class="tr tr-act"><span class="tr-role">10:02:12</span><div class="tr-body">agent-5 → agent-3  request(id=82) "Send me your criteria first."</div></div>
+    <div class="tr tr-sys"><span class="tr-role">10:02:12</span><div class="tr-body">agent-3 awaiting reply to 81 (no timeout)
+agent-5 awaiting reply to 82 (no timeout)</div></div>
+    <div class="tr tr-sys"><span class="tr-role">10:07:12</span><div class="tr-body">watchdog: no events for 300 s · 2 tasks pending → dump wait graph: 3 → 5 → 3 → <span class="hl">fail run, keep partial results</span></div></div>
+  </div>
+  <dl class="defs">
+    <dt>Mechanism</dt><dd>All four Coffman conditions hold (Chapter 17): each agent holds its own state, waits for the other, nothing can take the wait away, and the waits form a cycle.</dd>
+    <dt>Signal</dt><dd>The run goes quiet. No events, no tokens spent, tasks still pending. This is the one failure that's <em>cheap</em>, which is why it's easy to miss in a cost dashboard.</dd>
+    <dt>Test</dt><dd>Two fake agents scripted to request from each other before replying. Assert that a timeout or the watchdog ends the run within a bound, and that the trace names the cycle.</dd>
+    <dt>MAST</dt><dd>Closest is 2.2 (fails to ask for clarification) or 1.5. The real fix is structural: timeouts on every wait, or a rule that requests only flow down the tree.</dd>
+  </dl>
+
+  <h2 id="mitigations">Mitigations at a glance</h2>
+  <p>Each failure above has a first line of defence, and nearly all of them live in the harness rather than in a prompt. A prompt can ask an agent not to over-spawn. Only code can make over-spawning impossible.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Failure</th><th>First defence</th><th>Where it's enforced</th><th>Ch</th></tr></thead>
+      <tbody>
+        <tr><td>1 · Runaway spawning</td><td>Hard caps on depth, fan-out and total agents; one shared budget pool</td><td>Spawn service, before anything is created</td><td>16, 11</td></tr>
+        <tr><td>2 · Duplicate work</td><td>Reject near-duplicate objectives; give each brief an explicit scope boundary</td><td>Plan validator</td><td>16</td></tr>
+        <tr><td>3 · Telephone game</td><td>Pass references to stored findings, not only summaries; keep provenance on each claim</td><td>Return contract and a shared findings store</td><td>16</td></tr>
+        <tr><td>4 · Groupthink</td><td>Independent first answers before anyone sees the others; judge by evidence, not by votes</td><td>Debate protocol, aggregator</td><td>17, 18</td></tr>
+        <tr><td>5 · Cascading hallucination</td><td>Every claim cites a source; check citations resolve before aggregating</td><td>Contract check and final check</td><td>12, 13</td></tr>
+        <tr><td>6 · False success</td><td>Treat status as a claim; check the result against the return contract in code</td><td>Contract check, per child</td><td>11</td></tr>
+        <tr><td>7 · Never terminating</td><td>Step, time and token limits; loop detection</td><td>Loop driver</td><td>11</td></tr>
+        <tr><td>8 · Cost explosion</td><td>Budget pool, per-agent caps, no broadcast by default</td><td>Budget ledger</td><td>11, 17</td></tr>
+        <tr><td>9 · Deadlock</td><td>A timeout on every wait; requests only flow down the tree; a watchdog</td><td>Runtime and message bus</td><td>10, 17</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 id="verification">Design for verification</h2>
+  <p>The MAST authors argue that many of these failures come from how the system is designed, not from weak models, so a better model alone won't remove them. Their third category, verification and termination, is the one you control most directly. A system that checks its work at every boundary turns most of the catalog from silent failures into visible, recoverable ones.</p>
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 190" role="img" aria-label="A child's result is a claim. A contract check in code tests its shape, status and scope before the parent sees it. The parent aggregates. A final check confirms every claim traces to a source before the answer is returned. Either check can reject: retry with the error, mark the child failed, or return a partial result.">
+        <defs>
+          <marker id="f195-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f195-ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-red" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-xs t-accent" x="235" y="28" text-anchor="middle">shape, status, scope</text>
+        <text class="t-xs t-accent" x="545" y="28" text-anchor="middle">claims trace to sources</text>
+
+        <rect class="n-sunken" x="20" y="40" width="120" height="52" rx="6"/>
+        <text class="t-b" x="80" y="62" text-anchor="middle">child result</text><text class="t-sm t-muted" x="80" y="79" text-anchor="middle">a claim</text>
+        <line x1="140" y1="66" x2="168" y2="66" marker-end="url(#f195-ah)"/>
+        <rect class="n-accent" x="170" y="40" width="130" height="52" rx="6"/>
+        <text class="t-b" x="235" y="62" text-anchor="middle">contract check</text><text class="t-sm t-muted" x="235" y="79" text-anchor="middle">code, per child</text>
+        <line x1="300" y1="66" x2="328" y2="66" marker-end="url(#f195-ah)"/>
+        <rect x="330" y="40" width="120" height="52" rx="6"/>
+        <text class="t-b" x="390" y="62" text-anchor="middle">parent</text><text class="t-sm t-muted" x="390" y="79" text-anchor="middle">aggregates</text>
+        <line x1="450" y1="66" x2="478" y2="66" marker-end="url(#f195-ah)"/>
+        <rect class="n-accent" x="480" y="40" width="130" height="52" rx="6"/>
+        <text class="t-b" x="545" y="62" text-anchor="middle">final check</text><text class="t-sm t-muted" x="545" y="79" text-anchor="middle">code + verifier</text>
+        <line x1="610" y1="66" x2="638" y2="66" marker-end="url(#f195-ah)"/>
+        <rect class="n-accent n-thick" x="640" y="40" width="70" height="52" rx="6"/>
+        <text class="t-b" x="675" y="71" text-anchor="middle">answer</text>
+
+        <line class="e-red e-dash" x1="235" y1="92" x2="235" y2="128" marker-end="url(#f195-ahr)"/>
+        <line class="e-red e-dash" x1="545" y1="92" x2="545" y2="128" marker-end="url(#f195-ahr)"/>
+        <text class="t-xs t-red" x="241" y="114">empty result</text>
+        <text class="t-xs t-red" x="551" y="114">uncited claim</text>
+        <rect class="n-red" x="170" y="130" width="440" height="34" rx="5"/>
+        <text class="t-sm" x="390" y="151" text-anchor="middle">reject: retry with the error, mark failed, or return partial</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 19.5</b>Two checkpoints between a child's claim and the user. The contract check is plain code and runs on every child. The final check uses code where it can (do the cited sources exist?) and a model verifier only for what code can't judge. Either one can say no, and the harness acts on it.</figcaption>
+  </figure>
+  <p>Five rules make this work:</p>
+  <ol>
+    <li><strong>Check at every boundary, not only at the end.</strong> An error caught at the child costs one retry. Caught at the root, it may cost the run.</li>
+    <li><strong>Prefer code checks.</strong> “Has a status, has a non-empty result, stays within its assigned scope, every claim has a source id” is all checkable without a model.</li>
+    <li><strong>Give a model verifier different information.</strong> A verifier that reads the same summary as the parent inherits the same blind spots. Give it the sources, or the original brief, and ask a narrow question.</li>
+    <li><strong>A check must be able to say no, and the harness must act on it.</strong> A verifier whose “fail” is logged and ignored is decoration.</li>
+    <li><strong>Verify termination too.</strong> The root must not report success when a required child failed. That's a code rule on the aggregate, not a judgment.</li>
+  </ol>
+
+  <h2 id="break-it">From failure to test</h2>
+  <p>Every failure in the catalog can be reproduced with a scripted fake model, which makes it a deterministic test. Most of them already appear in your stage break-it lists in <code>SWARM_HARNESS_DEVELOPMENT.md</code>. Some don't, and that gap is worth noticing.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Failure</th><th>Fake-model test</th><th>Your break-it list</th></tr></thead>
+      <tbody>
+        <tr><td>1 · Runaway spawning</td><td>The fake model always asks to spawn. Assert each cap holds exactly at its limit and rejects one over.</td><td>Stage 2 (spawn bomb), Stage 5 (always asks to spawn)</td></tr>
+        <tr><td>2 · Duplicate work</td><td>A plan with two identical subtasks, or the parent's own task re-proposed deeper.</td><td>Stage 1, Stage 4, Stage 5</td></tr>
+        <tr><td>3 · Telephone game</td><td>A child summary that drops a constraint from its brief. Assert the final check flags the missing constraint.</td><td><em>Not on a list yet.</em> Add it?</td></tr>
+        <tr><td>4 · Groupthink</td><td>Scripted debaters where the minority holds the correct evidence. Assert the aggregator keeps it.</td><td>Only if you add debate (Stage 7 or later)</td></tr>
+        <tr><td>5 · Cascading hallucination</td><td>A child cites a source id that doesn't exist. Assert the contract check rejects it before the parent reads it.</td><td><em>Not on a list yet.</em> Add it?</td></tr>
+        <tr><td>6 · False success</td><td>A child returns status “success” with an empty result.</td><td>Stage 1 (returns nothing), Stage 5 (returns garbage)</td></tr>
+        <tr><td>7 · Never terminating</td><td>A child that hangs, or ignores cancellation. Assert the timeout fires and no orphan tasks remain.</td><td>Stage 3</td></tr>
+        <tr><td>8 · Cost explosion</td><td>Budget exhausted mid-tree. Assert a graceful partial result, not a crash.</td><td>Stage 5, Stage 6</td></tr>
+        <tr><td>9 · Deadlock</td><td>Two agents that each wait for the other. Assert the watchdog ends the run and names the cycle.</td><td>Stage 7 (circular waits)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="box pitfall">
+    <span class="box-label">Misconceptions to drop</span>
+    <ul>
+      <li>“A smarter model will fix it.” Most of the catalog is specification, coordination and verification. Those are code.</li>
+      <li>“Every agent succeeded, so the run succeeded.” Statuses are claims. A confident, under-budget, all-green run can still be wrong.</li>
+      <li>“More agents means more checking.” Only if some of them are given different information and the power to say no.</li>
+      <li>“Majority vote is a safe aggregator.” Not when the agents share a model, a prompt and each other's answers. Correlated errors vote together.</li>
+      <li>“A cheap run is a healthy run.” Deadlock is the cheapest failure there is.</li>
+    </ul>
+  </div>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Stage 1–2.</strong> Which fields must a child's Result carry so that a contract check can be written in code at all? If a child can return free text only, what <em>can't</em> you check?</li>
+      <li><strong>Stage 4.</strong> Your plan validator already rejects duplicates. How will it decide that two subtasks are “the same” when their wording differs? What's the cheapest test that would show it failing?</li>
+      <li><strong>Stage 5.</strong> Rows 3 and 5 of the table above aren't on any break-it list. Decide whether each belongs in Stage 5 or Stage 6, or write down why it's out of scope. Either answer is fine. Not deciding isn't.</li>
+      <li><strong>Stage 6.</strong> For each failure in the catalog, which trace signal would you alert on? Which ones can't your current trace fields detect?</li>
+    </ul>
+  </div>
+
+  <h2 id="check">Check yourself</h2>
+  <p>Answer each one out loud or on paper before you open it.</p>
+  <div class="quiz">
+    <details>
+      <summary><span class="tag recall">Recall</span> Name MAST's three categories and give one failure mode from each.</summary>
+      <div><p>Specification and system design (for example, disobeying the task specification, or being unaware of termination conditions). Inter-agent misalignment (for example, failing to ask for clarification, withholding information, ignoring another agent's input). Task verification and termination (for example, premature termination, or no or incorrect verification).</p></div>
+    </details>
+    <details>
+      <summary><span class="tag recall">Recall</span> Why is deadlock easy to miss on a cost dashboard, and what catches it?</summary>
+      <div><p>A deadlocked run spends nothing: no tokens, no events, just pending tasks. Cost alerts never fire. What catches it is a timeout on every wait, plus a watchdog that notices “no events for N seconds while tasks are pending” and dumps the wait graph.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> A planner always proposes 3 children, and nothing limits it. How many agents exist four levels below the root? Which single limit bounds the total, whatever the depth?</summary>
+      <div><p>1 + 3 + 9 + 27 + 81 = 121. A depth limit bounds the depth but not the width at each level. A cap on <em>total agents</em> (or a shared budget pool) bounds the total directly, whatever shape the tree takes.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> Every agent reported success and the answer reads well, but one key “fact” came from a page a child misread. Which failure is this, what does the trace show, and which check would have caught it?</summary>
+      <div><p>Cascading hallucination. In the trace, the claim first appears in one child's result with either no source or a source that doesn't support it, then shows up unchanged in every level above. A contract rule that every claim carries a source id, plus a final check that the cited source exists and contains the claim, would catch it at a boundary.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> You add a three-agent debate for the final recommendation. Give two protocol rules that resist groupthink.</summary>
+      <div><p>Each agent writes its first answer independently, before seeing the others. A change of position must cite new evidence, not just agreement. Also good: the aggregator weighs evidence instead of counting votes, and a minority position is kept in the output when its evidence is strong.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> For each check, choose code or a model verifier: (a) every child result follows the return contract; (b) the final architecture recommendation is sound.</summary>
+      <div><p>(a) Code: it's structure and rules, so it's checkable exactly and cheaply. (b) A model verifier with a pass/fail rubric, given the sources and the original task rather than the parent's summary, and validated against your own grading on a sample (Chapter 13).</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “Your multi-agent system sometimes returns confidently wrong answers. How do you debug it?”</summary>
+      <div><p>Collect failing runs and their traces. For each, find the first span where the wrong content appears, and name the failure mode. Ask which boundary check should have caught it and why it didn't. Reproduce it as a deterministic test with a fake model. Fix the structure (contract, provenance, verification), not just the prompt. Then re-run the eval many times to confirm the rate changed, and watch cost and latency while you do.</p></div>
+    </details>
+  </div>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><strong>Mert Cemri et al., “Why Do Multi-Agent LLM Systems Fail?”</strong> (2025).<span class="why">The MAST taxonomy and the annotated traces behind it. Read the failure-mode definitions; they make good test names.</span></li>
+    <li><strong>J. Hadfield et al., “How we built our multi-agent research system”</strong> (Anthropic, 2025).<span class="why">Early failure modes seen in practice, such as over-spawning on simple queries and subagents duplicating each other's work.</span></li>
+    <li><strong>Walden Yan, “Don't Build Multi-Agents”</strong> (Cognition, 2025).<span class="why">Why decisions made separately by different agents conflict, which is the root of duplicate work and of pieces that don't fit.</span></li>
+    <li><strong>Yilun Du et al., “Improving Factuality and Reasoning in Language Models through Multiagent Debate”</strong> (2023).<span class="why">The debate setup that groupthink undermines. Read it alongside failure 4.</span></li>
+    <li><strong>E. G. Coffman, M. Elphick and A. Shoshani, “System Deadlocks”</strong> (<em>ACM Computing Surveys</em>, 1971).<span class="why">The four conditions for deadlock used in failure 9 and Chapter 17.</span></li>
+  </ul>
+
+  <section class="recall-card" aria-labelledby="recall-19">
+    <h2 id="recall-19" data-short="Recall card">Recall card</h2>
+    <p class="muted small">Five lines to rehearse. If you can expand each into a minute of explanation, you know this chapter.</p>
+    <ol>
+      <li>Most multi-agent failures are specification, coordination or verification problems. A smarter model doesn't fix them.</li>
+      <li>MAST: specification and system design, inter-agent misalignment, task verification and termination.</li>
+      <li>Each failure leaves a signal in the trace. Know the signal before you meet the failure.</li>
+      <li>A child's status is a claim. Code turns it into a fact at every boundary, and the harness acts on a “no”.</li>
+      <li>Every failure in the catalog should become a fake-model test on a break-it list.</li>
+    </ol>
+  </section>
+
+  <div class="done">
+    <input type="checkbox" id="done-toggle" data-chapter="19">
+    <label for="done-toggle">I can explain this chapter without notes<small>Saved in this browser only. It updates the count on the guide's home page.</small></label>
+  </div>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="18-swarm-intelligence.html"><small>Previous · Chapter 18</small>Swarm intelligence: from ants to LLMs</a>
+    <a class="next" href="20-swarm-harness-architecture.html"><small>Next · Chapter 20</small>Designing a swarm harness</a>
+  </nav>
+</main>
+<aside class="toc-rail" aria-label="On this page"><p class="toc-title">In this chapter</p><nav data-toc></nav></aside>
+</div>
+</body>
+</html>

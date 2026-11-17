@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Designing a Swarm Harness · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="../index.html">Loop <span>→</span> Swarm</a>
+    <div class="crumbs"><a href="../index.html">Guide</a> · Part 5 · Putting it together · Chapter 20</div>
+    <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+  </div>
+</header>
+
+<div class="page has-toc">
+<main class="chapter">
+
+  <header class="ch-head">
+    <p class="eyebrow"><b>Part 5 · Putting it together</b> · Chapter 20 · Level L5</p>
+    <h1>Designing a swarm harness</h1>
+    <p class="lede">Nineteen chapters of parts. This one assembles them into one possible shape for a swarm harness: what it must guarantee, which component owns which state, how one run moves through them, and which decisions are still yours. It is a reference to argue with, not a blueprint to copy.</p>
+    <ul class="ch-meta">
+      <li><b>60 min</b> reading</li>
+      <li>Builds on: <b>Ch 08, 10, 11, 16</b></li>
+      <li>Your project: <b>all stages</b></li>
+    </ul>
+    <ol class="where" aria-label="Where this chapter sits in the guide">
+      <li class="past"><span>Part 1</span>Foundations</li>
+      <li class="past"><span>Part 2</span>Thinking &amp; memory</li>
+      <li class="past"><span>Part 3</span>The harness</li>
+      <li class="past"><span>Part 4</span>Multi-agent</li>
+      <li class="here"><span>Part 5</span>Together</li>
+    </ol>
+  </header>
+
+  <details class="toc-mobile"><summary>In this chapter</summary><div data-toc></div></details>
+
+  <div class="box predict">
+    <span class="box-label">Predict first · 15 min</span>
+    <p>Write answers in <code>docs/LEARNING_NOTES.md</code> under “Guide ch20”. Tag each one <em>sure</em> or <em>guess</em>. Do this before you look at any figure in this chapter: the point is to compare your shape with this one.</p>
+    <ol>
+      <li>List the components you think a swarm harness needs. For each one, name the state it <em>owns</em> (the data no other component may write).</li>
+      <li>Sketch the sequence of Experiment 001: one root task, a planner that splits it, children that may split again. Mark the exact point where the budget is checked.</li>
+      <li>Which single design decision would be the most expensive to change after Stage 5? Why that one?</li>
+    </ol>
+  </div>
+
+  <h2 id="big-idea">The big idea</h2>
+  <p>Chapter 08 ended with a sentence: <em>a swarm harness is a harness of harnesses</em>. Each agent runs the same small loop you met in Chapter 03 (call the model, run tools, repeat). The swarm harness adds the machinery that lets one loop start other loops safely: something that decides whether a spawn is allowed, something that counts what has been spent, something that runs many loops at once without letting them trample each other, and something that writes down everything that happened.</p>
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>Architecture is a list of ownership claims.</strong> For every piece of state in the system (the budget, the tree of agents, each agent's messages, the trace) exactly one component may change it, and everyone else asks. Most multi-agent bugs in Chapter 19 trace back to state with two writers or none.</p>
+  </div>
+  <p>The rest of this chapter goes from the outside in. First the guarantees the harness must give (requirements). Then a component diagram that meets them. Then one run traced through it, step by step. Then the data each component holds. Then the decisions this guide deliberately leaves open, because they are the actual learning in your project.</p>
+
+  <h2 id="requirements">Requirements before boxes</h2>
+  <p>Start with what the system must <em>guarantee</em>, not with which classes it has. A requirement that names a guarantee (“a failed child never crashes the run”) forces a component into existence. A requirement that names a component (“we need a message bus”) skips the reasoning and usually adds something you don't need yet.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 760 384" role="img" aria-label="Seven requirements on the left each force one or two components on the right. Recursive decomposition forces the agent runtime and spawn service. Hard limits force the spawn service and budget ledger. Parallelism forces the budget ledger and executor. Failure isolation forces the executor and a result type with status. Explainability forces the registry and tracer. Deterministic tests force a model client with a fake. Measured quality forces the tracer and an evaluation harness.">
+        <defs>
+          <marker id="f2001-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-caps t-muted" x="20" y="22">requirement (a guarantee)</text>
+        <text class="t-caps t-muted" x="378" y="22" text-anchor="middle">forces</text>
+        <text class="t-caps t-muted" x="480" y="22">component (an owner)</text>
+
+        <rect class="n-amber" x="20" y="44" width="260" height="34" rx="5"/><text x="32" y="66"><tspan class="t-b">R1</tspan> Decompose recursively, any depth</text>
+        <rect class="n-amber" x="20" y="92" width="260" height="34" rx="5"/><text x="32" y="114"><tspan class="t-b">R2</tspan> Hard limits on size and spend</text>
+        <rect class="n-amber" x="20" y="140" width="260" height="34" rx="5"/><text x="32" y="162"><tspan class="t-b">R3</tspan> Independent work runs in parallel</text>
+        <rect class="n-amber" x="20" y="188" width="260" height="34" rx="5"/><text x="32" y="210"><tspan class="t-b">R4</tspan> One failure doesn't crash the run</text>
+        <rect class="n-amber" x="20" y="236" width="260" height="34" rx="5"/><text x="32" y="258"><tspan class="t-b">R5</tspan> Every decision explainable later</text>
+        <rect class="n-amber" x="20" y="284" width="260" height="34" rx="5"/><text x="32" y="306"><tspan class="t-b">R6</tspan> Tests are deterministic</text>
+        <rect class="n-amber" x="20" y="332" width="260" height="34" rx="5"/><text x="32" y="354"><tspan class="t-b">R7</tspan> Answer quality is measured</text>
+
+        <line class="e-muted" x1="280" y1="61" x2="476" y2="53" marker-end="url(#f2001-ah)"/>
+        <line class="e-muted" x1="280" y1="61" x2="476" y2="91" marker-end="url(#f2001-ah)"/>
+        <line class="e-muted" x1="280" y1="109" x2="476" y2="91" marker-end="url(#f2001-ah)"/>
+        <line class="e-muted" x1="280" y1="109" x2="476" y2="129" marker-end="url(#f2001-ah)"/>
+        <line class="e-muted" x1="280" y1="157" x2="476" y2="129" marker-end="url(#f2001-ah)"/>
+        <line class="e-muted" x1="280" y1="157" x2="476" y2="205" marker-end="url(#f2001-ah)"/>
+        <line class="e-muted" x1="280" y1="205" x2="476" y2="205" marker-end="url(#f2001-ah)"/>
+        <line class="e-muted" x1="280" y1="205" x2="476" y2="243" marker-end="url(#f2001-ah)"/>
+        <line class="e-muted" x1="280" y1="253" x2="476" y2="167" marker-end="url(#f2001-ah)"/>
+        <line class="e-muted" x1="280" y1="253" x2="476" y2="281" marker-end="url(#f2001-ah)"/>
+        <line class="e-muted" x1="280" y1="301" x2="476" y2="319" marker-end="url(#f2001-ah)"/>
+        <line class="e-muted" x1="280" y1="349" x2="476" y2="281" marker-end="url(#f2001-ah)"/>
+        <line class="e-muted" x1="280" y1="349" x2="476" y2="357" marker-end="url(#f2001-ah)"/>
+
+        <rect class="n-plain" x="480" y="38" width="260" height="30" rx="5"/><text x="492" y="58"><tspan class="t-b">C1</tspan> Agent runtime (the loop)</text>
+        <rect class="n-accent" x="480" y="76" width="260" height="30" rx="5"/><text x="492" y="96"><tspan class="t-b">C2</tspan> Spawn service + policy</text>
+        <rect class="n-accent" x="480" y="114" width="260" height="30" rx="5"/><text x="492" y="134"><tspan class="t-b">C3</tspan> Budget ledger</text>
+        <rect class="n-plain" x="480" y="152" width="260" height="30" rx="5"/><text x="492" y="172"><tspan class="t-b">C4</tspan> Agent registry / tree</text>
+        <rect class="n-plain" x="480" y="190" width="260" height="30" rx="5"/><text x="492" y="210"><tspan class="t-b">C5</tspan> Executor (semaphore, timeouts)</text>
+        <rect class="n-plain" x="480" y="228" width="260" height="30" rx="5"/><text x="492" y="248"><tspan class="t-b">C6</tspan> Result type with a status</text>
+        <rect class="n-violet" x="480" y="266" width="260" height="30" rx="5"/><text x="492" y="286"><tspan class="t-b">C7</tspan> Tracer + trace store</text>
+        <rect class="n-plain" x="480" y="304" width="260" height="30" rx="5"/><text x="492" y="324"><tspan class="t-b">C8</tspan> Model client + fake</text>
+        <rect class="n-plain" x="480" y="342" width="260" height="30" rx="5"/><text x="492" y="362"><tspan class="t-b">C9</tspan> Evaluation harness + baseline</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 20.1</b>Every component should be able to name the requirement that created it. If you can't draw an arrow into a box, that box is speculation. Notice that no requirement forces a message bus or shared memory yet: those arrive only if an experiment shows the need (Stages 7 and 8).</figcaption>
+  </figure>
+
+  <p>A few of these deserve unpacking, because they are less obvious than they look:</p>
+  <dl class="defs">
+    <dt>R2 hard limits</dt><dd>“Hard” means enforced by code the model can't talk its way past. A prompt that says “don't spawn more than 5 agents” is a request, not a limit. The limit lives in the spawn service (Chapter 16).</dd>
+    <dt>R3 parallel</dt><dd>Parallelism creates the race you met in Chapter 10: two children check “is there budget left?” at the same moment and both get yes. So R3 doesn't only force an executor; it forces the budget ledger to reserve atomically.</dd>
+    <dt>R4 isolation</dt><dd>Failure must become <em>data</em> (a Result with status <code>failed</code>), not an exception that unwinds through the parent. That single choice changes the signature of every function that runs a child.</dd>
+    <dt>R5 explainable</dt><dd>“Why did agent 7 exist?” needs a parent link, the plan that proposed it, and the policy decision that allowed it. That's the registry plus structured trace events, not log lines.</dd>
+    <dt>R6 deterministic</dt><dd>The model is non-deterministic (Chapter 01), so the harness must be testable without it. A scripted fake model makes spawn trees, failures and budgets reproducible.</dd>
+    <dt>R7 measured</dt><dd>“The swarm is better” is a claim about a comparison. Without a single-agent baseline on the same tasks (Chapter 13), it can't be true or false.</dd>
+  </dl>
+
+  <h2 id="reference" data-short="Reference shape">One possible shape</h2>
+  <p>Here is one arrangement of those components. Read it as a set of ownership boundaries and request paths. The arrows are <em>requests</em> (“may I?”, “please run”, “here is my result”), and every arrow is a place where a trace event should be emitted.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 900 514" role="img" aria-label="Reference component diagram. The runner starts the root agent runtime and receives the final result. An agent runtime requests spawns from the spawn service, which checks policy, reserves budget in the budget ledger, registers the child in the registry and schedules it on the executor. The executor runs child runtimes. Runtimes call the model client and pass child results to the aggregator. Every component emits events to the tracer, which appends to a trace store. A message bus and shared memory are drawn dashed as conditional.">
+        <defs>
+          <marker id="f2002-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f2002-ahv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-violet" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f2002-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+
+        <rect class="n-plain n-thick" x="335" y="16" width="230" height="46" rx="6"/>
+        <text class="t-b" x="450" y="36" text-anchor="middle">Runner</text>
+        <text class="t-sm t-muted" x="450" y="52" text-anchor="middle">owns the run: run_id, final Result</text>
+        <path d="M335,39 H135 V102" marker-start="url(#f2002-ah)" marker-end="url(#f2002-ah)"/>
+        <text class="t-sm" x="232" y="32" text-anchor="middle">start root · final Result</text>
+
+        <rect class="n-sunken" x="28" y="104" width="230" height="150" rx="6"/>
+        <rect class="n-sunken" x="24" y="108" width="230" height="150" rx="6"/>
+        <rect class="n-plain" x="20" y="112" width="230" height="150" rx="6"/>
+        <text class="t-b" x="135" y="134" text-anchor="middle">Agent runtime</text>
+        <text class="t-sm t-muted" x="135" y="150" text-anchor="middle">one per agent · many at once</text>
+        <rect x="36" y="160" width="198" height="24" rx="4"/><text class="t-sm" x="46" y="176">loop: model → tools → repeat</text>
+        <rect x="36" y="190" width="198" height="24" rx="4"/><text class="t-sm" x="46" y="206">tools, incl. request_spawn</text>
+        <rect x="36" y="220" width="198" height="24" rx="4"/><text class="t-sm" x="46" y="236">own state: messages, status</text>
+
+        <rect class="n-accent" x="335" y="100" width="230" height="70" rx="6"/>
+        <text class="t-b" x="450" y="120" text-anchor="middle">Spawn service</text>
+        <text class="t-sm t-muted" x="450" y="135" text-anchor="middle">validate → reserve → create</text>
+        <rect class="n-amber" x="347" y="142" width="206" height="20" rx="4"/>
+        <text class="t-sm" x="450" y="156" text-anchor="middle">policy: depth · fan-out · budget</text>
+
+        <rect class="n-plain" x="335" y="190" width="230" height="60" rx="6"/>
+        <text class="t-b" x="450" y="214" text-anchor="middle">Executor</text>
+        <text class="t-sm t-muted" x="450" y="232" text-anchor="middle">semaphore · timeouts · cancel</text>
+
+        <rect class="n-accent" x="650" y="100" width="230" height="60" rx="6"/>
+        <text class="t-b" x="765" y="124" text-anchor="middle">Budget ledger</text>
+        <text class="t-sm t-muted" x="765" y="142" text-anchor="middle">limits · reserved · spent</text>
+
+        <rect class="n-plain" x="650" y="180" width="230" height="60" rx="6"/>
+        <text class="t-b" x="765" y="204" text-anchor="middle">Agent registry / tree</text>
+        <text class="t-sm t-muted" x="765" y="222" text-anchor="middle">id → record · parent → children</text>
+
+        <rect class="n-plain" x="20" y="290" width="230" height="46" rx="6"/>
+        <text class="t-b" x="135" y="310" text-anchor="middle">Model client</text>
+        <text class="t-sm t-muted" x="135" y="326" text-anchor="middle">provider API, or a fake for tests</text>
+
+        <rect class="n-plain" x="335" y="290" width="230" height="46" rx="6"/>
+        <text class="t-b" x="450" y="310" text-anchor="middle">Result aggregator</text>
+        <text class="t-sm t-muted" x="450" y="326" text-anchor="middle">children's Results → one Result</text>
+
+        <line class="e-accent" x1="250" y1="135" x2="333" y2="135" marker-end="url(#f2002-aha)"/>
+        <text class="t-sm t-accent" x="291" y="128" text-anchor="middle">request spawn</text>
+        <line x1="565" y1="120" x2="648" y2="120" marker-end="url(#f2002-ah)"/>
+        <text class="t-sm" x="606" y="113" text-anchor="middle">reserve</text>
+        <path d="M565,152 H606 V210 H648" marker-end="url(#f2002-ah)"/>
+        <text class="t-sm" x="600" y="185" text-anchor="end">register</text>
+        <line x1="450" y1="170" x2="450" y2="188" marker-end="url(#f2002-ah)"/>
+        <text class="t-sm" x="458" y="183">schedule</text>
+        <line x1="335" y1="220" x2="252" y2="220" marker-end="url(#f2002-ah)"/>
+        <text class="t-sm" x="293" y="213" text-anchor="middle">run child</text>
+        <line x1="135" y1="262" x2="135" y2="288" marker-end="url(#f2002-ah)"/>
+        <text class="t-mono" x="143" y="280">complete()</text>
+        <path d="M250,250 H292 V313 H333" marker-end="url(#f2002-ah)"/>
+        <text class="t-sm" x="298" y="272">results</text>
+
+        <rect class="n-violet" x="20" y="372" width="860" height="40" rx="6"/>
+        <text class="t-b" x="450" y="397" text-anchor="middle">Tracer: every component emits events (run_id, agent_id, parent_id, type, ts)</text>
+        <line class="e-violet e-dash" x1="135" y1="336" x2="135" y2="370" marker-end="url(#f2002-ahv)"/>
+        <line class="e-violet e-dash" x1="450" y1="336" x2="450" y2="370" marker-end="url(#f2002-ahv)"/>
+        <line class="e-violet e-dash" x1="765" y1="240" x2="765" y2="370" marker-end="url(#f2002-ahv)"/>
+        <text class="t-sm t-violet" x="773" y="310">emit events</text>
+
+        <rect class="n-ghost" x="20" y="448" width="230" height="46" rx="6"/>
+        <text class="t-b t-muted" x="135" y="468" text-anchor="middle">Message bus</text>
+        <text class="t-sm t-muted" x="135" y="484" text-anchor="middle">Stage 7 · only if needed</text>
+        <rect class="n-ghost" x="335" y="448" width="230" height="46" rx="6"/>
+        <text class="t-b t-muted" x="450" y="468" text-anchor="middle">Shared memory</text>
+        <text class="t-sm t-muted" x="450" y="484" text-anchor="middle">Stage 8 · only if needed</text>
+        <rect class="n-sunken" x="650" y="448" width="230" height="46" rx="6"/>
+        <text class="t-b" x="765" y="468" text-anchor="middle">Trace store</text>
+        <text class="t-sm t-muted" x="765" y="484" text-anchor="middle">JSONL → replay, cost report</text>
+        <line x1="765" y1="412" x2="765" y2="446" marker-end="url(#f2002-ah)"/>
+        <text class="t-sm" x="773" y="433">append</text>
+        <text class="t-sm t-muted" x="20" y="508">Dashed outline = conditional. Add it only when an experiment shows the need.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 20.2</b>One possible shape. The agent runtime never talks to the budget or the registry directly: it <em>asks</em> the spawn service, which is the single place where “is this allowed?” is answered. The stacked boxes mean many runtimes exist at once, all running the same code.</figcaption>
+  </figure>
+
+  <div class="box key">
+    <span class="box-label">Read this as one possible shape</span>
+    <p>This is not your architecture. Real systems merge some of these boxes (the spawn service and the registry are often one class) or split others (the executor might become a worker pool on another machine). What should survive any rearrangement are the <strong>boundaries</strong>: limits are enforced outside the agent, budget changes go through one owner, every child's outcome comes back as a value, and every decision leaves an event.</p>
+  </div>
+
+  <h3>What each component owns, and what it must never do</h3>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Component</th><th>Owns (sole writer)</th><th>Must never</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Runner</strong></td><td>run_id, run-level config, the final Result</td><td>reach inside an agent's loop</td></tr>
+        <tr><td><strong>Agent runtime</strong></td><td>its own messages, step count, status</td><td>create a child directly, or edit the budget</td></tr>
+        <tr><td><strong>Spawn service</strong></td><td>the decision to allow or deny a spawn</td><td>run the child itself (that is the executor's job)</td></tr>
+        <tr><td><strong>Budget ledger</strong></td><td>limits, reserved, spent</td><td>await anything between “check” and “update”</td></tr>
+        <tr><td><strong>Registry / tree</strong></td><td>agent records and parent → child links</td><td>hold live objects that other code mutates</td></tr>
+        <tr><td><strong>Executor</strong></td><td>running tasks, the concurrency limit, timeouts</td><td>swallow a child's exception without turning it into a Result</td></tr>
+        <tr><td><strong>Aggregator</strong></td><td>the rule that turns many Results into one</td><td>silently drop failed children</td></tr>
+        <tr><td><strong>Tracer</strong></td><td>the ordered event stream</td><td>change behavior (it observes; it doesn't decide)</td></tr>
+        <tr><td><strong>Model client</strong></td><td>the provider connection and retry of transport errors</td><td>leak provider-specific types into the runtime</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 id="run" data-short="One run, in order">One run through the shape</h2>
+  <p>Now watch Experiment 001 move through Figure 20.2. The root agent asks the model for a plan, the plan has three subtasks, and one child (B) decides its subtask is still too big and asks for two children of its own. Follow the budget: it is checked twice, both times <em>before</em> anything is created.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 900 620" role="img" aria-label="Sequence diagram of one run. The runner starts the root agent, which asks the model for a plan and gets three subtasks. The root requests three spawns; the spawn service validates the plan, reserves three agents in the budget ledger, and schedules A, B and C on the executor. Child B calls the model, learns it needs two subtasks, requests two spawns, which are reserved within limits. B1 and B2 run and return. B returns a Result to the root, which aggregates A, B and C and returns the final Result to the runner.">
+        <defs>
+          <marker id="f2003-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f2003-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-plain" x="15" y="12" width="110" height="36" rx="5"/><text class="t-b" x="70" y="35" text-anchor="middle">Runner</text>
+        <rect class="n-plain" x="135" y="12" width="110" height="36" rx="5"/><text class="t-b" x="190" y="35" text-anchor="middle">Root agent</text>
+        <rect class="n-sunken" x="255" y="12" width="110" height="36" rx="5"/><text class="t-b" x="310" y="35" text-anchor="middle">Model</text>
+        <rect class="n-accent" x="385" y="12" width="110" height="36" rx="5"/><text class="t-b" x="440" y="35" text-anchor="middle">Spawn service</text>
+        <rect class="n-accent" x="515" y="12" width="110" height="36" rx="5"/><text class="t-b" x="570" y="35" text-anchor="middle">Budget ledger</text>
+        <rect class="n-plain" x="635" y="12" width="110" height="36" rx="5"/><text class="t-b" x="690" y="35" text-anchor="middle">Executor</text>
+        <rect class="n-plain" x="765" y="12" width="110" height="36" rx="5"/><text class="t-b" x="820" y="35" text-anchor="middle">Child B</text>
+
+        <line class="e-line e-dash" x1="70" y1="48" x2="70" y2="610"/>
+        <line class="e-line e-dash" x1="190" y1="48" x2="190" y2="610"/>
+        <line class="e-line e-dash" x1="310" y1="48" x2="310" y2="610"/>
+        <line class="e-line e-dash" x1="440" y1="48" x2="440" y2="610"/>
+        <line class="e-line e-dash" x1="570" y1="48" x2="570" y2="610"/>
+        <line class="e-line e-dash" x1="690" y1="48" x2="690" y2="610"/>
+        <line class="e-line e-dash" x1="820" y1="48" x2="820" y2="610"/>
+
+        <line x1="70" y1="70" x2="188" y2="70" marker-end="url(#f2003-ah)"/><text class="t-sm" x="130" y="64" text-anchor="middle">run(task)</text>
+        <line x1="190" y1="100" x2="308" y2="100" marker-end="url(#f2003-ah)"/><text class="t-sm" x="250" y="94" text-anchor="middle">plan this task</text>
+        <line class="e-muted e-dash" x1="310" y1="130" x2="192" y2="130" marker-end="url(#f2003-ahm)"/><text class="t-sm t-muted" x="250" y="124" text-anchor="middle">3 subtasks (JSON)</text>
+        <line x1="190" y1="160" x2="438" y2="160" marker-end="url(#f2003-ah)"/><text class="t-sm" x="314" y="154" text-anchor="middle">request_spawn × 3</text>
+        <rect class="n-amber" x="380" y="176" width="120" height="24" rx="4"/><text class="t-sm" x="440" y="192" text-anchor="middle">validate the plan</text>
+        <line class="e-accent" x1="440" y1="226" x2="568" y2="226" marker-end="url(#f2003-ah)"/><text class="t-sm t-accent t-b" x="505" y="220" text-anchor="middle">reserve 3 agents</text>
+        <line class="e-muted e-dash" x1="570" y1="256" x2="442" y2="256" marker-end="url(#f2003-ahm)"/><text class="t-sm t-muted" x="505" y="250" text-anchor="middle">ok</text>
+        <line x1="440" y1="286" x2="688" y2="286" marker-end="url(#f2003-ah)"/><text class="t-sm" x="565" y="280" text-anchor="middle">register, schedule A, B, C</text>
+        <line x1="690" y1="316" x2="818" y2="316" marker-end="url(#f2003-ah)"/><text class="t-sm" x="755" y="310" text-anchor="middle">run B</text>
+        <line x1="820" y1="346" x2="312" y2="346" marker-end="url(#f2003-ah)"/><text class="t-sm" x="565" y="340" text-anchor="middle">complete(B's subtask)</text>
+        <line class="e-muted e-dash" x1="310" y1="376" x2="818" y2="376" marker-end="url(#f2003-ahm)"/><text class="t-sm t-muted" x="565" y="370" text-anchor="middle">“needs 2 subtasks”</text>
+        <line x1="820" y1="406" x2="442" y2="406" marker-end="url(#f2003-ah)"/><text class="t-sm" x="631" y="400" text-anchor="middle">request_spawn × 2</text>
+        <line class="e-accent" x1="440" y1="436" x2="568" y2="436" marker-end="url(#f2003-ah)"/><text class="t-sm t-accent t-b" x="505" y="430" text-anchor="middle">reserve 2 agents</text>
+        <line class="e-muted e-dash" x1="570" y1="466" x2="442" y2="466" marker-end="url(#f2003-ahm)"/><text class="t-sm t-muted" x="505" y="460" text-anchor="middle">ok, within limits</text>
+        <rect class="n-sunken" x="460" y="482" width="400" height="26" rx="4"/><text class="t-sm" x="660" y="499" text-anchor="middle">B1 and B2 are registered, scheduled, run and return the same way</text>
+        <line class="e-muted e-dash" x1="820" y1="536" x2="192" y2="536" marker-end="url(#f2003-ahm)"/><text class="t-sm t-muted" x="505" y="530" text-anchor="middle">Result(status, answer, usage)</text>
+        <rect class="n-accent" x="130" y="554" width="120" height="24" rx="4"/><text class="t-sm" x="190" y="570" text-anchor="middle">aggregate A, B, C</text>
+        <line class="e-muted e-dash" x1="190" y1="596" x2="72" y2="596" marker-end="url(#f2003-ahm)"/><text class="t-sm t-muted" x="130" y="590" text-anchor="middle">final Result</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 20.3</b>One run, in time order (top to bottom). Solid arrows are requests; dashed arrows are replies. A and C run at the same time as B but are left out to keep the drawing readable. The two highlighted “reserve” steps are the only places the budget changes before work starts, and both happen before any agent is created.</figcaption>
+  </figure>
+
+  <p>The same run, as the trace store would record it. Every line is one event with the fields from Figure 20.2. Notice the denial: it is not an exception. It is an event, and the parent receives it as an observation it can reason about.</p>
+
+  <div class="trace">
+    <div class="trace-title">Experiment 001 · trace excerpt (one JSON event per line, shortened)</div>
+    <div class="tr tr-sys"><span class="tr-role">run_start</span><span class="tr-body">run_id=r42 · limits: depth 3, fan-out 4, agents 30, tokens 400K</span></div>
+    <div class="tr tr-user"><span class="tr-role">agent_start</span><span class="tr-body">agent=root · parent=null · depth=0 · task="Compare three vector databases for our use case"</span></div>
+    <div class="tr tr-think"><span class="tr-role">llm_call</span><span class="tr-body">agent=root · in=1,840 out=310 · plan: [A: Qdrant, B: pgvector, C: Weaviate]</span></div>
+    <div class="tr tr-act"><span class="tr-role">spawn_req</span><span class="tr-body">agent=root · n=3 · validated ✓ · reserved 3 agents · depth 1 · agents 4/30</span></div>
+    <div class="tr tr-act"><span class="tr-role">spawn_req</span><span class="tr-body">agent=B · n=2 · validated ✓ · reserved 2 agents · depth 2 · agents 6/30</span></div>
+    <div class="tr tr-act"><span class="tr-role">spawn_req</span><span class="tr-body">agent=B1 · n=2 · validated ✓ · reserved 2 agents · depth 3 · agents 8/30</span></div>
+    <div class="tr tr-sys"><span class="tr-role">spawn_deny</span><span class="tr-body">agent=B1a · n=1 · reason=depth_limit (would be depth 4 &gt; 3) · returned to B1a as a tool_result with is_error</span></div>
+    <div class="tr tr-obs"><span class="tr-role">agent_done</span><span class="tr-body">agent=B1a · status=ok · answered directly after the denial</span></div>
+    <div class="tr tr-sys"><span class="tr-role">agent_done</span><span class="tr-body">agent=C · status=failed · error=timeout after 120s · tokens spent 22K (kept in the ledger)</span></div>
+    <div class="tr tr-obs"><span class="tr-role">agent_done</span><span class="tr-body">agent=root · status=partial · aggregated 2 ok + 1 failed · answer notes that C is missing</span></div>
+    <div class="tr tr-final"><span class="tr-role">run_end</span><span class="tr-body">run_id=r42 · status=partial · agents=8 · tokens=212K · wall=3m41s · max depth reached=3</span></div>
+  </div>
+
+  <p>Three details in that trace are design choices, not accidents. Ask yourself whether your harness would make each the same way:</p>
+  <ul>
+    <li><strong>The denial goes back to the agent that asked</strong>, as a tool error it can work around. The alternative is to fail that agent outright. Which is better depends on whether you trust agents to recover.</li>
+    <li><strong>C's spent tokens stay spent.</strong> A failed agent's spending is real money. Releasing only the <em>unspent part</em> of its reservation is a ledger rule you have to write down.</li>
+    <li><strong>The run ends <code>partial</code>, not <code>failed</code>.</strong> That status exists only if your Result type allows it, and your aggregator decides when to use it.</li>
+  </ul>
+
+  <h3>The spawn path, as pseudocode</h3>
+  <p>This sketch shows only the <em>order</em> of steps from Chapter 16, inside the spawn service. The bodies are deliberately missing: they are Stage 2 and Stage 5 of your project. The comments mark the questions each step makes you answer.</p>
+<pre><code><span class="k">async def</span> handle_spawn_request(parent, proposed_tasks):
+    <span class="c"># 1. VALIDATE: is the proposal well formed and allowed by policy?</span>
+    problems = validate(proposed_tasks, parent)      <span class="c"># schema, duplicates, depth, fan-out</span>
+    <span class="k">if</span> problems:
+        tracer.emit(<span class="s">"spawn_deny"</span>, parent, problems)
+        <span class="k">return</span> denial_as_tool_result(problems)        <span class="c"># data, not an exception</span>
+
+    <span class="c"># 2. RESERVE: one atomic step. No await between check and update.</span>
+    <span class="hl">reservation = ledger.try_reserve(parent, cost_estimate(proposed_tasks))</span>
+    <span class="k">if not</span> reservation:
+        tracer.emit(<span class="s">"spawn_deny"</span>, parent, <span class="s">"budget"</span>)
+        <span class="k">return</span> denial_as_tool_result(<span class="s">"budget"</span>)
+
+    <span class="c"># 3. CREATE + REGISTER: records exist before anything runs</span>
+    children = [registry.create(parent, t, reservation.share(t)) <span class="k">for</span> t <span class="k">in</span> proposed_tasks]
+
+    <span class="c"># 4. SCHEDULE + RUN: the executor owns concurrency and timeouts</span>
+    results = <span class="k">await</span> executor.run_all(children)          <span class="c"># each → Result(status=...)</span>
+
+    <span class="c"># 5. SETTLE: return unspent reservation; spent stays spent</span>
+    ledger.settle(reservation, results)
+
+    <span class="c"># 6. RETURN: the parent sees values, never raw exceptions</span>
+    <span class="k">return</span> summarize_for_parent(results)              <span class="c"># how much detail? (context passing)</span></code></pre>
+
+  <div class="box note">
+    <span class="box-label">Who calls this?</span>
+    <p>In Stages 2–4 your code calls the spawn path directly from a scripted plan. In Stage 5 the model calls it, through a <code>request_spawn</code> tool. The function above shouldn't change between those stages. If it does, the boundary is in the wrong place.</p>
+  </div>
+
+  <h2 id="models" data-short="Data models">Data models: fields to consider</h2>
+  <p>Before you write a class, list the fields and, for each one, the question it forces. The table below is a checklist of fields worth <em>considering</em>, not a schema to copy. Several fields only make sense once you've answered a design question in the next section; those questions are in the right-hand column.</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Entity</th><th>Fields to consider</th><th>The question each one forces</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Task</strong></td><td><code>id</code>, <code>objective</code>, <code>parent_task_id</code>, <code>context</code>, <code>expected_output</code>, <code>required</code></td><td>How much of the parent's context does a child get? Is the expected output free text or a schema? Can the parent succeed if an optional task fails?</td></tr>
+        <tr><td><strong>AgentRecord</strong></td><td><code>id</code>, <code>parent_id</code>, <code>depth</code>, <code>status</code>, <code>child_ids</code>, <code>budget</code>, <code>created_at</code></td><td>Who is allowed to change <code>status</code>? Is depth stored or computed from the parent chain? Which statuses exist, and which transitions are legal (Chapter 09)?</td></tr>
+        <tr><td><strong>Result</strong></td><td><code>status</code> (ok / failed / partial / cancelled), <code>output</code>, <code>error</code>, <code>usage</code>, <code>provenance</code></td><td>Is a timeout a <code>failed</code> or a <code>cancelled</code>? Does <code>usage</code> include the children's usage? How does the parent know which child said what?</td></tr>
+        <tr><td><strong>Event</strong></td><td><code>run_id</code>, <code>agent_id</code>, <code>parent_id</code>, <code>type</code>, <code>ts</code>, <code>seq</code>, <code>payload</code></td><td>Is <code>ts</code> enough to order events from concurrent agents, or do you need a sequence number? Which event types are a closed list?</td></tr>
+        <tr><td><strong>Budget</strong></td><td><code>limits</code>, <code>reserved</code>, <code>spent</code>, scope (run or agent)</td><td>Do you reserve an estimate, or a hard slice? What happens to a reservation when the agent fails halfway?</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Wire shapes help you think about these as data, separate from Python classes. Here is one Result as JSON, showing the fields a parent needs to make a decision without reading the child's full transcript:</p>
+<pre><code>{
+  <span class="s">"agent_id"</span>: <span class="s">"B"</span>,  <span class="s">"status"</span>: <span class="s">"partial"</span>,
+  <span class="s">"output"</span>: <span class="s">"pgvector fits under 10M vectors; above that, see caveats."</span>,
+  <span class="s">"error"</span>: <span class="k">null</span>,
+  <span class="s">"usage"</span>: { <span class="s">"input_tokens"</span>: <span class="n">48210</span>, <span class="s">"output_tokens"</span>: <span class="n">3120</span>, <span class="s">"agents"</span>: <span class="n">3</span> },
+  <span class="hl"><span class="s">"children"</span>: [ { <span class="s">"agent_id"</span>: <span class="s">"B1"</span>, <span class="s">"status"</span>: <span class="s">"ok"</span> }, { <span class="s">"agent_id"</span>: <span class="s">"B2"</span>, <span class="s">"status"</span>: <span class="s">"failed"</span> } ]</span>
+}</code></pre>
+  <p>Why is <code>children</code> highlighted? Because it is a choice. Including it lets the root explain a partial answer. Leaving it out keeps the parent's context small. That's the context-passing decision (card 4 below) showing up in your data model.</p>
+
+  <h2 id="decisions" data-short="Decisions you own">Design decisions you still own</h2>
+  <p>This guide stops here on purpose. Each card below is a real fork in the road: two or three defensible options, each with a cost. There is no recommended answer. Write your choice and your reason in <code>docs/LEARNING_NOTES.md</code> when you reach the stage named on the card, then check it against what your traces show.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 760 300" role="img" aria-label="Two budget designs. Left: a shared pool of 100K tokens that every agent draws from as needed. Right: slices, where the root has 100K, keeps 10K and gives A, B and C 30K each; B keeps 6K and gives B1 and B2 12K each.">
+        <defs>
+          <marker id="f2004-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-amber" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-b" x="185" y="22" text-anchor="middle">Option A · one shared pool</text>
+        <text class="t-sm t-muted" x="185" y="38" text-anchor="middle">every agent draws from one counter</text>
+        <rect class="n-amber" x="30" y="54" width="310" height="38" rx="6"/>
+        <text class="t-b" x="185" y="78" text-anchor="middle">pool: 100K tokens</text>
+        <line class="e-amber e-dash" x1="50" y1="168" x2="50" y2="96" marker-end="url(#f2004-aha)"/>
+        <line class="e-amber e-dash" x1="104" y1="168" x2="104" y2="96" marker-end="url(#f2004-aha)"/>
+        <line class="e-amber e-dash" x1="158" y1="168" x2="158" y2="96" marker-end="url(#f2004-aha)"/>
+        <line class="e-amber e-dash" x1="212" y1="168" x2="212" y2="96" marker-end="url(#f2004-aha)"/>
+        <line class="e-amber e-dash" x1="266" y1="168" x2="266" y2="96" marker-end="url(#f2004-aha)"/>
+        <line class="e-amber e-dash" x1="320" y1="168" x2="320" y2="96" marker-end="url(#f2004-aha)"/>
+        <text class="t-xs t-amber" x="185" y="128" text-anchor="middle">draw as</text>
+        <text class="t-xs t-amber" x="185" y="142" text-anchor="middle">needed</text>
+        <rect x="28" y="170" width="44" height="26" rx="4"/><text class="t-sm" x="50" y="187" text-anchor="middle">root</text>
+        <rect x="82" y="170" width="44" height="26" rx="4"/><text class="t-sm" x="104" y="187" text-anchor="middle">A</text>
+        <rect x="136" y="170" width="44" height="26" rx="4"/><text class="t-sm" x="158" y="187" text-anchor="middle">B</text>
+        <rect x="190" y="170" width="44" height="26" rx="4"/><text class="t-sm" x="212" y="187" text-anchor="middle">C</text>
+        <rect x="244" y="170" width="44" height="26" rx="4"/><text class="t-sm" x="266" y="187" text-anchor="middle">B1</text>
+        <rect x="298" y="170" width="44" height="26" rx="4"/><text class="t-sm" x="320" y="187" text-anchor="middle">B2</text>
+        <text class="t-sm" x="30" y="230">+ simple; no budget is stranded in idle slices</text>
+        <text class="t-sm t-red" x="30" y="250">− an early, greedy child can starve later ones</text>
+        <text class="t-sm t-red" x="30" y="270">− every draw goes through one shared counter</text>
+
+        <line class="e-line e-dash" x1="380" y1="10" x2="380" y2="290"/>
+
+        <text class="t-b" x="575" y="22" text-anchor="middle">Option B · slices</text>
+        <text class="t-sm t-muted" x="575" y="38" text-anchor="middle">each parent splits what it was given</text>
+        <rect class="n-accent" x="525" y="54" width="100" height="38" rx="5"/>
+        <text class="t-sm t-b" x="575" y="70" text-anchor="middle">root · 100K</text>
+        <text class="t-xs t-muted" x="575" y="85" text-anchor="middle">keeps 10K</text>
+        <line class="e-muted" x1="575" y1="92" x2="455" y2="128"/>
+        <line class="e-muted" x1="575" y1="92" x2="575" y2="128"/>
+        <line class="e-muted" x1="575" y1="92" x2="695" y2="128"/>
+        <rect x="415" y="128" width="80" height="38" rx="5"/><text class="t-sm t-b" x="455" y="151" text-anchor="middle">A · 30K</text>
+        <rect class="n-accent" x="535" y="128" width="80" height="38" rx="5"/><text class="t-sm t-b" x="575" y="144" text-anchor="middle">B · 30K</text><text class="t-xs t-muted" x="575" y="159" text-anchor="middle">keeps 6K</text>
+        <rect x="655" y="128" width="80" height="38" rx="5"/><text class="t-sm t-b" x="695" y="151" text-anchor="middle">C · 30K</text>
+        <line class="e-muted" x1="575" y1="166" x2="535" y2="200"/>
+        <line class="e-muted" x1="575" y1="166" x2="615" y2="200"/>
+        <rect x="500" y="200" width="70" height="30" rx="5"/><text class="t-sm" x="535" y="219" text-anchor="middle">B1 · 12K</text>
+        <rect x="580" y="200" width="70" height="30" rx="5"/><text class="t-sm" x="615" y="219" text-anchor="middle">B2 · 12K</text>
+        <text class="t-sm" x="400" y="256">+ no child can ever overspend its parent</text>
+        <text class="t-sm t-red" x="400" y="276">− an unused slice is stranded unless it's returned</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 20.4</b>Two ways to split one budget. In the pool, the limit is global and enforcement is one atomic counter. In slices, every parent becomes a small budget authority for its subtree. Hybrids exist (slices that return their unspent part, or a pool with a per-agent cap), and each hybrid adds rules you must write down.</figcaption>
+  </figure>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 760 262" role="img" aria-label="Two ways to own the agent tree. Left: a central registry table with id, parent and status columns, and agents reporting changes to it. Right: no table; the runner holds the root, the root holds handles to A and B, and B holds B1, so the tree is the call graph.">
+        <defs>
+          <marker id="f2005-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f2005-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-b" x="190" y="22" text-anchor="middle">Option A · central registry</text>
+        <text class="t-sm t-muted" x="190" y="38" text-anchor="middle">one table; agents report changes to it</text>
+        <rect class="n-accent" x="110" y="54" width="170" height="118" rx="6"/>
+        <text class="t-caps" x="122" y="74">id</text><text class="t-caps" x="160" y="74">parent</text><text class="t-caps" x="214" y="74">status</text>
+        <line class="e-line" x1="118" y1="82" x2="272" y2="82"/>
+        <text class="t-mono" x="122" y="100">root</text><text class="t-mono t-muted" x="160" y="100">—</text><text class="t-mono" x="214" y="100">running</text>
+        <text class="t-mono" x="122" y="120">A</text><text class="t-mono t-muted" x="160" y="120">root</text><text class="t-mono" x="214" y="120">done</text>
+        <text class="t-mono" x="122" y="140">B</text><text class="t-mono t-muted" x="160" y="140">root</text><text class="t-mono" x="214" y="140">running</text>
+        <text class="t-mono" x="122" y="160">B1</text><text class="t-mono t-muted" x="160" y="160">B</text><text class="t-mono" x="214" y="160">queued</text>
+        <rect x="20" y="62" width="60" height="24" rx="4"/><text class="t-sm" x="50" y="78" text-anchor="middle">root</text>
+        <rect x="20" y="102" width="60" height="24" rx="4"/><text class="t-sm" x="50" y="118" text-anchor="middle">A</text>
+        <rect x="20" y="142" width="60" height="24" rx="4"/><text class="t-sm" x="50" y="158" text-anchor="middle">B</text>
+        <rect x="300" y="102" width="60" height="24" rx="4"/><text class="t-sm" x="330" y="118" text-anchor="middle">B1</text>
+        <line class="e-muted" x1="80" y1="74" x2="107" y2="74" marker-end="url(#f2005-ahm)"/>
+        <line class="e-muted" x1="80" y1="114" x2="107" y2="114" marker-end="url(#f2005-ahm)"/>
+        <line class="e-muted" x1="80" y1="154" x2="107" y2="154" marker-end="url(#f2005-ahm)"/>
+        <line class="e-muted" x1="300" y1="114" x2="283" y2="114" marker-end="url(#f2005-ahm)"/>
+        <text class="t-xs t-muted" x="50" y="190" text-anchor="middle">report status</text>
+        <text class="t-sm" x="20" y="222">+ one place to ask “what is running?”</text>
+        <text class="t-sm" x="20" y="238">+ easy to snapshot and persist</text>
+        <text class="t-sm t-red" x="20" y="254">− one more shared thing to keep consistent</text>
+
+        <line class="e-line e-dash" x1="380" y1="10" x2="380" y2="252"/>
+
+        <text class="t-b" x="575" y="22" text-anchor="middle">Option B · parents hold children</text>
+        <text class="t-sm t-muted" x="575" y="38" text-anchor="middle">no table; the tree is the call graph</text>
+        <rect class="n-plain" x="535" y="50" width="80" height="24" rx="4"/><text class="t-sm t-b" x="575" y="66" text-anchor="middle">Runner</text>
+        <rect x="535" y="94" width="80" height="24" rx="4"/><text class="t-sm" x="575" y="110" text-anchor="middle">root</text>
+        <rect x="470" y="140" width="80" height="24" rx="4"/><text class="t-sm" x="510" y="156" text-anchor="middle">A</text>
+        <rect x="600" y="140" width="80" height="24" rx="4"/><text class="t-sm" x="640" y="156" text-anchor="middle">B</text>
+        <rect x="600" y="184" width="80" height="24" rx="4"/><text class="t-sm" x="640" y="200" text-anchor="middle">B1</text>
+        <line x1="575" y1="74" x2="575" y2="92" marker-end="url(#f2005-ah)"/>
+        <line x1="575" y1="118" x2="512" y2="138" marker-end="url(#f2005-ah)"/>
+        <line x1="575" y1="118" x2="638" y2="138" marker-end="url(#f2005-ah)"/>
+        <line x1="640" y1="164" x2="640" y2="182" marker-end="url(#f2005-ah)"/>
+        <text class="t-xs t-muted" x="400" y="86">arrow = holds a handle</text>
+        <text class="t-sm" x="400" y="222">+ ownership follows the call stack</text>
+        <text class="t-sm" x="400" y="238">+ nothing extra to keep in sync</text>
+        <text class="t-sm t-red" x="400" y="254">− “what is running?” means walking the tree</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 20.5</b>Who knows the shape of the tree? In option A a table knows; in option B only the parents do. Your trace store can rebuild the tree either way (every event has <code>parent_id</code>), which is why some designs start with B and add A only when a live view or persistence needs it.</figcaption>
+  </figure>
+
+  <div class="cols-2">
+    <div class="card">
+      <h4>1 · Who owns the tree?</h4>
+      <p class="small muted">Decide at Stage 2 · Figure 20.5</p>
+      <ul>
+        <li><b>Central registry.</b> Easy global queries and snapshots. Costs a second source of truth that must agree with what's actually running.</li>
+        <li><b>Parent-held handles.</b> Minimal and naturally consistent. Global questions (“how many are running?”) need a walk or the trace.</li>
+        <li><b>Both</b>, with the registry as a read-only view. Clear, but you must decide who updates it and when.</li>
+      </ul>
+      <p class="small"><b>Measure:</b> how often you need a global question answered while the run is live.</p>
+    </div>
+    <div class="card">
+      <h4>2 · How is the budget split?</h4>
+      <p class="small muted">Decide at Stages 2 and 5 · Figure 20.4</p>
+      <ul>
+        <li><b>One pool.</b> Simplest and nothing is stranded. Fairness is not guaranteed.</li>
+        <li><b>Slices.</b> Local, provable limits per subtree. Parents must guess how much each child needs.</li>
+        <li><b>Hybrid</b> (slices that return their unspent part, or a pool with per-agent caps). More flexible, more rules.</li>
+      </ul>
+      <p class="small"><b>Measure:</b> stranded budget at the end of a run; how often a late child is denied.</p>
+    </div>
+    <div class="card">
+      <h4>3 · What happens when a child fails?</h4>
+      <p class="small muted">Decide at Stages 2, 3 and 6</p>
+      <ul>
+        <li><b>Fail the parent</b> (fail fast). Simple and honest; one flaky child kills a large run.</li>
+        <li><b>Return partial.</b> The parent continues and reports what's missing. Needs a <code>required</code> flag or a quorum rule.</li>
+        <li><b>Retry, then degrade.</b> Bounded retries for transient errors only. Costs tokens and time; needs idempotent tools.</li>
+      </ul>
+      <p class="small"><b>Measure:</b> fraction of runs ending partial vs failed, and whether partial answers are still correct.</p>
+    </div>
+    <div class="card">
+      <h4>4 · What context does a child get, and return?</h4>
+      <p class="small muted">Decide at Stages 4 and 5 · Chapters 06, 16</p>
+      <ul>
+        <li><b>Task only.</b> Smallest context, best isolation. Risks the child missing a constraint the parent knew.</li>
+        <li><b>Task + curated brief.</b> The parent writes what matters. Quality depends on the parent's summary (the telephone game).</li>
+        <li><b>Full parent history.</b> Nothing lost, but context grows with depth and isolation disappears.</li>
+      </ul>
+      <p class="small"><b>Measure:</b> child answers that violate a parent constraint; tokens per child.</p>
+    </div>
+    <div class="card">
+      <h4>5 · How are results combined?</h4>
+      <p class="small muted">Decide at Stages 2 and 5</p>
+      <ul>
+        <li><b>Concatenate.</b> Deterministic and cheap. Overflows the parent's context as fan-out grows.</li>
+        <li><b>LLM synthesis.</b> Produces one coherent answer. Adds a model call and can drop or invent facts.</li>
+        <li><b>Structured merge</b> (each child returns fields, code merges them). Reliable, but only works when outputs have a shape.</li>
+      </ul>
+      <p class="small"><b>Measure:</b> facts present in children but missing from the final answer.</p>
+    </div>
+    <div class="card">
+      <h4>6 · How much runs at once?</h4>
+      <p class="small muted">Decide at Stage 3 · Chapter 10</p>
+      <ul>
+        <li><b>One global semaphore.</b> Protects the provider's rate limit. Deep trees can deadlock if parents hold slots while waiting for children.</li>
+        <li><b>Per-level or per-parent limits.</b> Avoids that deadlock. More knobs to tune.</li>
+        <li><b>Model calls limited, agents not.</b> Limits the expensive part only. Many idle agents still hold memory and state.</li>
+      </ul>
+      <p class="small"><b>Measure:</b> wall time vs concurrency; 429 errors; any run that stops making progress.</p>
+    </div>
+    <div class="card">
+      <h4>7 · What survives a crash?</h4>
+      <p class="small muted">Decide at Stage 6 · Chapter 09</p>
+      <ul>
+        <li><b>Nothing</b> (re-run from scratch). Simplest. Pays the whole cost again.</li>
+        <li><b>Trace only.</b> You can explain and replay, but not resume.</li>
+        <li><b>Checkpoints</b> of each agent's state. Can resume, but every tool must be safe to repeat (idempotency).</li>
+      </ul>
+      <p class="small"><b>Measure:</b> how long and expensive your real runs are; that sets the price of losing one.</p>
+    </div>
+    <div class="card">
+      <h4>8 · When is the run over?</h4>
+      <p class="small muted">Decide at Stage 2 · Chapter 16</p>
+      <ul>
+        <li><b>When the root returns.</b> Clear. Orphaned children must be cancelled explicitly.</li>
+        <li><b>A global deadline.</b> Bounded wall time. Needs a clean way to cancel the whole tree.</li>
+        <li><b>Quiescence</b> (nothing running, nothing queued). Natural for message-based designs; harder to detect correctly.</li>
+      </ul>
+      <p class="small"><b>Measure:</b> agents still running after the root finished (should be zero).</p>
+    </div>
+  </div>
+
+  <div class="box stop">
+    <span class="box-label">Stop and decide · on paper</span>
+    <p>Card 6 hides a trap. If a parent waits for its children while holding a concurrency slot, and the children need slots to run, what happens when the semaphore is full? Write the smallest tree that deadlocks with a limit of 2. Then write which option on card 6 would prevent it, and which option on card 8 would at least stop it from hanging forever. Don't look anything up first.</p>
+  </div>
+
+  <h2 id="stages" data-short="Map to Stages 0–9">Which stage introduces which component</h2>
+  <p>You won't build Figure 20.2 at once, and you shouldn't. Each stage of your plan adds the component that its experiment needs and no more. The map below is one reading of your plan. Check it against your own <code>swarm_harness_development.md</code>; if they disagree, your plan wins, but write down why.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 900 594" role="img" aria-label="A map of components against Stages 0 to 9. Stage 0 is asyncio practice. Stage 1 introduces the runner, agent runtime, tracer, budget ledger and result type. Stage 2 adds the spawn service, and minimal versions of the registry and aggregator. Stage 3 adds the executor with a semaphore. Stage 4 adds the model client with a fake and the plan validator. Stage 5 makes spawning a tool the model can call. Stage 6 adds retries, persistence and evaluation. Stages 7 and 8 add a message bus and shared memory only if needed. Stage 9 compares against frameworks.">
+        <text class="t-caps t-muted" x="20" y="18">component</text>
+        <text class="t-caps" x="301" y="18" text-anchor="middle">S0</text><text class="t-xs t-muted" x="301" y="32" text-anchor="middle">asyncio</text>
+        <text class="t-caps" x="363" y="18" text-anchor="middle">S1</text><text class="t-xs t-muted" x="363" y="32" text-anchor="middle">1 root</text>
+        <text class="t-caps" x="425" y="18" text-anchor="middle">S2</text><text class="t-xs t-muted" x="425" y="32" text-anchor="middle">spawn</text>
+        <text class="t-caps" x="487" y="18" text-anchor="middle">S3</text><text class="t-xs t-muted" x="487" y="32" text-anchor="middle">concur.</text>
+        <text class="t-caps" x="549" y="18" text-anchor="middle">S4</text><text class="t-xs t-muted" x="549" y="32" text-anchor="middle">planner</text>
+        <text class="t-caps" x="611" y="18" text-anchor="middle">S5</text><text class="t-xs t-muted" x="611" y="32" text-anchor="middle">LLM rec.</text>
+        <text class="t-caps" x="673" y="18" text-anchor="middle">S6</text><text class="t-xs t-muted" x="673" y="32" text-anchor="middle">harden</text>
+        <text class="t-caps" x="735" y="18" text-anchor="middle">S7</text><text class="t-xs t-muted" x="735" y="32" text-anchor="middle">comms</text>
+        <text class="t-caps" x="797" y="18" text-anchor="middle">S8</text><text class="t-xs t-muted" x="797" y="32" text-anchor="middle">memory</text>
+        <text class="t-caps" x="859" y="18" text-anchor="middle">S9</text><text class="t-xs t-muted" x="859" y="32" text-anchor="middle">compare</text>
+
+        <line class="e-line" x1="270" y1="38" x2="270" y2="552"/><line class="e-line" x1="332" y1="38" x2="332" y2="552"/>
+        <line class="e-line" x1="394" y1="38" x2="394" y2="552"/><line class="e-line" x1="456" y1="38" x2="456" y2="552"/>
+        <line class="e-line" x1="518" y1="38" x2="518" y2="552"/><line class="e-line" x1="580" y1="38" x2="580" y2="552"/>
+        <line class="e-line" x1="642" y1="38" x2="642" y2="552"/><line class="e-line" x1="704" y1="38" x2="704" y2="552"/>
+        <line class="e-line" x1="766" y1="38" x2="766" y2="552"/><line class="e-line" x1="828" y1="38" x2="828" y2="552"/>
+        <line class="e-line" x1="890" y1="38" x2="890" y2="552"/>
+
+        <text x="20" y="59">asyncio drills, architecture note</text>
+        <rect class="n-sunken" x="273" y="44" width="56" height="22" rx="4"/>
+
+        <text x="20" y="89">Runner</text>
+        <rect class="n-accent" x="335" y="74" width="552" height="22" rx="4"/><circle class="fill-accent" cx="345" cy="85" r="4"/>
+        <text x="20" y="119">Agent runtime (the loop)</text>
+        <rect class="n-accent" x="335" y="104" width="552" height="22" rx="4"/><circle class="fill-accent" cx="345" cy="115" r="4"/>
+        <text class="t-xs t-muted" x="357" y="119">same loop at every depth</text>
+        <text x="20" y="149">Tracer + trace store</text>
+        <rect class="n-accent" x="335" y="134" width="552" height="22" rx="4"/><circle class="fill-accent" cx="345" cy="145" r="4"/>
+        <text class="t-xs t-muted" x="357" y="149">token fields exist before any LLM does</text>
+        <text x="20" y="179">Budget ledger</text>
+        <rect class="n-accent" x="335" y="164" width="552" height="22" rx="4"/><circle class="fill-accent" cx="345" cy="175" r="4"/>
+        <text x="20" y="209">Result type with a status</text>
+        <rect class="n-accent" x="335" y="194" width="552" height="22" rx="4"/><circle class="fill-accent" cx="345" cy="205" r="4"/>
+
+        <text x="20" y="239">Spawn service + policy</text>
+        <rect class="n-accent" x="397" y="224" width="490" height="22" rx="4"/><circle class="fill-accent" cx="407" cy="235" r="4"/>
+        <text class="t-xs t-muted" x="419" y="239">limits enforced outside the agent</text>
+        <text x="20" y="269">Registry / tree</text>
+        <rect class="n-amber" x="397" y="254" width="490" height="22" rx="4"/><circle class="fill-amber" cx="407" cy="265" r="4"/>
+        <text class="t-xs t-amber" x="419" y="269">start minimal; grow it when it hurts</text>
+        <text x="20" y="299">Result aggregator</text>
+        <rect class="n-amber" x="397" y="284" width="490" height="22" rx="4"/><circle class="fill-amber" cx="407" cy="295" r="4"/>
+        <text class="t-xs t-amber" x="419" y="299">start minimal; grow it when it hurts</text>
+
+        <text x="20" y="329">Executor + semaphore</text>
+        <rect class="n-accent" x="459" y="314" width="428" height="22" rx="4"/><circle class="fill-accent" cx="469" cy="325" r="4"/>
+        <text class="t-xs t-muted" x="481" y="329">TaskGroup, timeouts, cancellation</text>
+
+        <text x="20" y="359">Model client + fake</text>
+        <rect class="n-accent" x="521" y="344" width="366" height="22" rx="4"/><circle class="fill-accent" cx="531" cy="355" r="4"/>
+        <text x="20" y="389">Plan validator</text>
+        <rect class="n-accent" x="521" y="374" width="366" height="22" rx="4"/><circle class="fill-accent" cx="531" cy="385" r="4"/>
+
+        <text x="20" y="419">Spawn as a tool (request_spawn)</text>
+        <rect class="n-accent" x="583" y="404" width="304" height="22" rx="4"/><circle class="fill-accent" cx="593" cy="415" r="4"/>
+        <text class="t-xs t-muted" x="605" y="419">model proposes, harness disposes</text>
+
+        <text x="20" y="449">Retries, persistence, evals</text>
+        <rect class="n-accent" x="645" y="434" width="242" height="22" rx="4"/><circle class="fill-accent" cx="655" cy="445" r="4"/>
+
+        <text class="t-muted" x="20" y="479">Message bus</text>
+        <rect class="n-ghost" x="707" y="464" width="180" height="22" rx="4"/>
+        <text class="t-xs t-muted" x="717" y="479">only if needed</text>
+        <text class="t-muted" x="20" y="509">Shared memory</text>
+        <rect class="n-ghost" x="769" y="494" width="118" height="22" rx="4"/>
+        <text class="t-xs t-muted" x="779" y="509">only if needed</text>
+
+        <text x="20" y="539">Framework comparison</text>
+        <rect class="n-violet" x="831" y="524" width="56" height="22" rx="4"/>
+
+        <circle class="fill-accent" cx="24" cy="574" r="4"/><text class="t-sm" x="34" y="578">introduced</text>
+        <rect class="n-accent" x="110" y="567" width="24" height="12" rx="2"/><text class="t-sm" x="140" y="578">kept and extended</text>
+        <rect class="n-amber" x="260" y="567" width="24" height="12" rx="2"/><text class="t-sm" x="290" y="578">keep minimal until it hurts</text>
+        <rect class="n-ghost" x="470" y="567" width="24" height="12" rx="2"/><text class="t-sm" x="500" y="578">only if an experiment needs it</text>
+        <rect class="n-sunken" x="690" y="567" width="24" height="12" rx="2"/><text class="t-sm" x="720" y="578">practice and study</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 20.6</b>Components against stages. Read down a column to see what a stage adds; read along a row to see how long a component has to live. The five components introduced at Stage 1 run through every later stage, so their interfaces are the ones to get right first. The bus and shared memory are dashed because your plan makes them conditional on evidence.</figcaption>
+  </figure>
+
+  <p>Two things to notice. First, Stage 1 introduces five components before there is any model: the runner, runtime, tracer, ledger and Result type can all be tested with a scripted fake. Second, the spawn path exists at Stage 2 but the model doesn't call it until Stage 5. That three-stage gap is where you prove the harness is correct before letting a non-deterministic planner drive it.</p>
+
+  <h2 id="production" data-short="What production adds">What production adds</h2>
+  <p>A learning harness that runs on your laptop and a production harness that serves a company differ in a predictable list of ways. None of these belong in your first stages, but knowing them prevents choices that make them impossible later (for example, an agent ID that's only unique within one process).</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Concern</th><th>What it adds to the shape</th><th>See</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Durable execution</strong></td><td>Agent state checkpointed outside the process, so a crashed run resumes instead of restarting</td><td>Ch 09</td></tr>
+        <tr><td><strong>Idempotency</strong></td><td>Tool calls carry keys, so a retried step doesn't send the email twice</td><td>Ch 09, 11</td></tr>
+        <tr><td><strong>Rate limits across agents</strong></td><td>One shared limiter in front of the model client, not per agent; backoff with jitter</td><td>Ch 10, 11</td></tr>
+        <tr><td><strong>Multi-tenancy</strong></td><td>Budgets, traces and memory scoped per user or team; no cross-tenant reads</td><td>Ch 12</td></tr>
+        <tr><td><strong>Cost controls</strong></td><td>Alerts and hard stops on spend per run, per user and per day</td><td>Ch 11</td></tr>
+        <tr><td><strong>Sandboxed tools</strong></td><td>Code and shell tools run isolated, with least privilege and egress control</td><td>Ch 12</td></tr>
+        <tr><td><strong>Standard telemetry</strong></td><td>Trace events exported as OpenTelemetry spans to the company's tooling</td><td>Ch 13</td></tr>
+        <tr><td><strong>Evals in CI</strong></td><td>A fixed task set re-run on every prompt, model or code change, with pass rates tracked</td><td>Ch 13</td></tr>
+        <tr><td><strong>Versioning</strong></td><td>Prompts, tool schemas and model versions recorded in every trace</td><td>Ch 01, 13</td></tr>
+        <tr><td><strong>Human approval gates</strong></td><td>Interrupts before risky actions, with state saved while waiting</td><td>Ch 09, 12</td></tr>
+        <tr><td><strong>Workers and queues</strong></td><td>The executor becomes a queue plus a worker pool, possibly on other machines</td><td>Ch 10, 17</td></tr>
+        <tr><td><strong>Data governance</strong></td><td>PII handling, retention rules for traces, audit logs</td><td>Ch 12</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="box pitfall">
+    <span class="box-label">Shapes to avoid</span>
+    <ul>
+      <li><strong>The god orchestrator.</strong> One class that plans, spawns, counts, runs and aggregates. It works until you need to test one of those alone.</li>
+      <li><strong>Components before pain.</strong> A message bus at Stage 2 because “swarms need communication”. Figure 20.1 has no arrow into it yet.</li>
+      <li><strong>The LLM enforcing its own limits.</strong> “You may spawn at most 4 children” in a prompt is a suggestion. Limits live in the spawn service.</li>
+      <li><strong>Unbounded recursion through a tool.</strong> If <code>request_spawn</code> doesn't pass through the policy check, depth limits apply to your scripted plans but not to the model.</li>
+      <li><strong>Shared mutable state with no owner.</strong> Two agents appending to the same list is a race even in single-threaded asyncio, if there's an <code>await</code> between the read and the write.</li>
+      <li><strong>Concatenating every child's output into the parent.</strong> At fan-out 10 with 3K tokens each, the parent's next call carries 30K tokens of results before it does any thinking.</li>
+    </ul>
+  </div>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Before Stage 1.</strong> Draw your own Figure 20.2 on paper without looking at this one. Then compare. Every box you drew that isn't here, and every box here you didn't draw, is a question for your architecture note.</li>
+      <li><strong>Stage 1.</strong> Write the ownership table (“Owns / Must never”) for your five Stage 1 components. Keep it in your architecture note and update it every stage.</li>
+      <li><strong>Stage 2.</strong> Answer cards 1, 2, 3, 5 and 8. Write each answer with the metric that would make you change it.</li>
+      <li><strong>Stage 3.</strong> Do the Stop-and-decide exercise above with a real test: build the smallest tree that could deadlock and prove your design doesn't.</li>
+      <li><strong>Stage 6.</strong> Choose one row from the production table that your company use case would need first, and justify it.</li>
+    </ul>
+  </div>
+
+  <h2 id="check">Check yourself</h2>
+  <p>Answer each one out loud or on paper before you open it.</p>
+  <div class="quiz">
+    <details>
+      <summary><span class="tag recall">Recall</span> Why does the spawn service check the limits, rather than the agent that wants to spawn?</summary>
+      <div><p>The agent is driven by a model, and a model can be wrong, confused or manipulated (prompt injection). A limit the agent enforces on itself is a request. A limit enforced by code outside the agent, at the single point every spawn must pass through, is a guarantee. It also puts every allow/deny decision in one place, so it can be traced and tested.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> Depth limit 3, fan-out limit 4, total-agent cap 30. Which limit actually binds, and what happens to the 31st spawn request?</summary>
+      <div><p>Depth and fan-out alone allow 1 + 4 + 16 + 64 = 85 agents, so the total cap of 30 binds first. The 31st request is denied by the spawn service, recorded as a <code>spawn_deny</code> event with the reason, and returned to the requesting agent as data (a tool error), so it can answer with what it has. Nothing is created, and no budget is reserved.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> Two children each request one spawn when exactly one agent slot is left. Both get “yes”. What went wrong?</summary>
+      <div><p>The check and the update were separated by an <code>await</code> (for example, a trace write or a model call). Both coroutines read “1 left”, then both reserved. The fix is to make check-and-reserve one step with no <code>await</code> between them (or to guard it with a lock), so the second request sees 0. Chapter 10 covers this race in detail.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> A parent gets back two <code>ok</code> results and one <code>failed</code>. Describe two different aggregation policies and when each is right.</summary>
+      <div><p>Fail fast: if any required child fails, the parent fails. Right when every part is essential (for example, all three sections of a contract review). Partial with disclosure: the parent answers from the two ok results, sets status <code>partial</code>, and says what's missing. Right when coverage can degrade gracefully (a market survey). A third option is a quorum (ok if at least <em>k</em> of <em>n</em> succeed), common in voting designs.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> You want a single-agent baseline for evaluation. Which components from Figure 20.2 does it still use?</summary>
+      <div><p>The runner, one agent runtime, the model client, the tracer and trace store, and the budget ledger (so cost is measured the same way). It skips the spawn service, executor fan-out, registry and aggregator. Using the same tracer and ledger is the point: the comparison is only fair if both sides are measured by the same code.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “Walk me through what happens between an agent saying ‘spawn’ and the child's first model call.”</summary>
+      <div><p>The model returns a <code>request_spawn</code> tool call. The runtime passes it to the spawn service. The service validates it (schema, duplicates, depth, fan-out), then atomically reserves budget. If either step fails, it returns a denial as a tool result. Otherwise it creates and registers the child record (id, parent, depth, budget), and the executor schedules it under the concurrency limit. The child's runtime builds its initial context from the task and brief, then makes its first model call. A trace event is emitted at each step.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “Your prototype works. What would it take to make it production-grade?”</summary>
+      <div><p>Structure the answer: durability (checkpoints, idempotent tools), limits (shared rate limiting, cost alerts, per-tenant budgets), safety (sandboxed tools, least privilege, approval gates), observability (OpenTelemetry export, versioned prompts and models in every trace), quality (an eval set run in CI against a single-agent baseline), and scale (a queue and workers instead of in-process tasks). Then say which one you'd do first for your specific use case, and why.</p></div>
+    </details>
+  </div>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><strong>Anthropic Engineering, “How we built our multi-agent research system”</strong> (2025).<span class="why">A real orchestrator-worker harness: how the lead agent briefs subagents, why effort has to be scaled to the query, and what made evaluation hard.</span></li>
+    <li><strong>Erik Schluntz and Barry Zhang, “Building effective agents”</strong> (Anthropic, 2024).<span class="why">The argument for the simplest shape that works, and the workflow patterns that a swarm generalizes.</span></li>
+    <li><strong>Mert Cemri et al., “Why Do Multi-Agent LLM Systems Fail?”</strong> (arXiv, 2025).<span class="why">The MAST taxonomy. Read its failure modes as a checklist against your component boundaries.</span></li>
+    <li><strong>Michael T. Nygard, “Release It!”</strong> (2nd ed., Pragmatic Bookshelf, 2018).<span class="why">Timeouts, bulkheads and circuit breakers: the stability patterns behind the executor and failure policy.</span></li>
+    <li><strong>Martin Kleppmann, “Designing Data-Intensive Applications”</strong> (O'Reilly, 2017).<span class="why">Event logs, idempotency and what “durable” really means. Background for the trace store and persistence card.</span></li>
+    <li><strong>Python documentation, asyncio:</strong> “Coroutines and Tasks” and “Synchronization Primitives”.<span class="why">TaskGroup, timeouts, cancellation and Semaphore: the building blocks of the executor.</span></li>
+  </ul>
+
+  <section class="recall-card" aria-labelledby="recall-20">
+    <h2 id="recall-20" data-short="Recall card">Recall card</h2>
+    <p class="muted small">Cover the page and reproduce these from memory. Redraw Figure 20.2 as part of it.</p>
+    <ol>
+      <li>Architecture is ownership: every piece of state has exactly one writer.</li>
+      <li>Requirements are guarantees; each one forces a component (Figure 20.1).</li>
+      <li>The spawn path: validate → reserve (atomically) → create and register → schedule → run → settle → return.</li>
+      <li>Limits live in the spawn service, never in the prompt.</li>
+      <li>Failures and denials come back as data: a Result with a status, or a tool error.</li>
+      <li>Eight open decisions: tree ownership, budget split, failure policy, context passing, aggregation, concurrency, persistence, termination.</li>
+      <li>Stage 1's five components live longest, so their interfaces matter most.</li>
+      <li>Production adds durability, idempotency, shared rate limits, isolation, telemetry, evals in CI.</li>
+    </ol>
+  </section>
+
+  <div class="done">
+    <input type="checkbox" id="done-toggle" data-chapter="20">
+    <label for="done-toggle">I can explain this chapter without notes<small>Saved in this browser only. It updates the count on the guide's home page.</small></label>
+  </div>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="19-multi-agent-failures.html"><small>Previous · Chapter 19</small>How multi-agent systems fail</a>
+    <a class="next" href="21-framework-landscape.html"><small>Next · Chapter 21</small>The framework landscape</a>
+  </nav>
+
+</main>
+<aside class="toc-rail" aria-label="On this page">
+  <p class="toc-title">In this chapter</p>
+  <nav data-toc></nav>
+</aside>
+</div>
+</body>
+</html>

@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Why Multiple Agents · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar"><div class="topbar-inner">
+  <a class="brand" href="../index.html">Loop <span>→</span> Swarm</a>
+  <div class="crumbs"><a href="../index.html">Guide</a> · Part 4 · Multi-agent · Chapter 14</div>
+  <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+</div></header>
+
+<div class="page has-toc">
+<main class="chapter">
+
+  <header class="ch-head">
+    <p class="eyebrow"><b>Part 4 · Multi-agent systems</b> · Chapter 14 · Level L4</p>
+    <h1>Why multiple agents (and why not)</h1>
+    <p class="lede">A second agent is not free intelligence. It is a second context window, a second clock and a second chance to be wrong. This chapter asks what you buy when you split one agent into many, what you pay for it, and how to tell in advance which side wins.</p>
+    <ul class="ch-meta">
+      <li><b>40 min</b> reading</li>
+      <li>Builds on: <b>ch06 Context engineering, ch10 Concurrency, ch13 Evaluation</b></li>
+      <li>Your project: <b>Stage 5, Stage 6</b></li>
+    </ul>
+    <ol class="where" aria-label="Where this chapter sits in the guide">
+      <li class="past"><span>Part 1</span>Foundations</li>
+      <li class="past"><span>Part 2</span>Thinking &amp; memory</li>
+      <li class="past"><span>Part 3</span>The harness</li>
+      <li class="here"><span>Part 4</span>Multi-agent</li>
+      <li><span>Part 5</span>Together</li>
+    </ol>
+  </header>
+
+  <details class="toc-mobile"><summary>In this chapter</summary><div data-toc></div></details>
+
+  <div class="box predict">
+    <span class="box-label">Predict first · 10 min</span>
+    <p>Write answers in <code>docs/LEARNING_NOTES.md</code> under “Guide ch14”. Tag each one <em>sure</em> or <em>guess</em>. You will check them at the end.</p>
+    <ol>
+      <li>One agent has a 200k-token window and could, in principle, read everything. Why might five agents with the same window each still do better?</li>
+      <li>A task has three independent parts taking 30 s, 22 s and 28 s, plus 5 s of planning and 10 s of synthesis. Estimate wall-clock time run in sequence and run in parallel.</li>
+      <li>Each handoff between agents is right 95% of the time. How often is a chain of eight handoffs right?</li>
+      <li>Name one task where splitting the work across agents would make the result <em>worse</em>. Say why.</li>
+    </ol>
+  </div>
+
+  <h2 id="big-idea">The big idea</h2>
+  <p>Everything in Parts 1–3 was about <em>one</em> loop: one model, one context window, one trajectory. A multi-agent system runs several of those loops and connects them. Each loop is an ordinary agent. What is new is the wiring between them, and the wiring has a price.</p>
+  <p>There are only three honest reasons to pay that price:</p>
+  <dl class="defs">
+    <dt>Context isolation</dt><dd>Each agent gets a fresh, focused window. It reads a lot, then returns a little. The agent that coordinates never sees the noise.</dd>
+    <dt>Parallelism</dt><dd>Independent parts run at the same time, so wall-clock time is set by the slowest part rather than the sum of the parts.</dd>
+    <dt>Specialization</dt><dd>Each agent gets a narrower prompt and a smaller tool set, so it chooses tools more reliably and follows its instructions more closely.</dd>
+  </dl>
+  <p>And four costs that come with every split: more <strong>tokens</strong>, <strong>coordination latency</strong>, <strong>compounding errors</strong> and <strong>information lost</strong> at every handoff.</p>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p>Multi-agent is a trade, not an upgrade. It pays when the task is <em>wide</em> (many parts that need little shared context) and valuable enough to cover the token bill. It loses when the task is <em>deep</em> (each step depends on decisions made in earlier steps). Your default should be one agent; you should have to argue your way to more.</p>
+  </div>
+
+  <h2 id="isolation">Reason 1: context isolation</h2>
+  <p>Chapter 06 showed that a context window is not a bucket that works equally well until it is full. Quality falls as it fills: old tool results distract, the middle gets less attention, and irrelevant detail competes with what matters. A long research task fills the window with search results from every subtopic at once.</p>
+  <p>A subagent is a way of <em>throwing context away on purpose</em>. The child reads forty pages about subtopic A in its own window, distils them into one page and returns that page. Its window, with all forty pages, is then discarded. The coordinator only ever holds the plan and the summaries.</p>
+
+  <figure class="fig"><div class="fig-frame">
+    <svg class="dg wide" viewBox="0 0 720 300" role="img" aria-label="Left: one agent whose single context window is filled with results from subtopics A, B and C and overflows. Right: a lead agent with a small context sends briefs to three workers, each with its own window, and receives one-page summaries back.">
+      <defs>
+        <marker id="f141-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="f141-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <text x="20" y="22" class="t-b">One agent, one window</text>
+      <rect x="40" y="44" width="110" height="230" class="n-plain"/>
+      <rect x="40" y="250" width="110" height="24" class="n-sunken"/>
+      <text x="95" y="266" text-anchor="middle" class="t-xs">system + task</text>
+      <rect x="40" y="190" width="110" height="60" class="n-accent"/>
+      <text x="95" y="224" text-anchor="middle" class="t-sm">A: 40 pages</text>
+      <rect x="40" y="130" width="110" height="60" class="n-violet"/>
+      <text x="95" y="164" text-anchor="middle" class="t-sm">B: 40 pages</text>
+      <rect x="40" y="70" width="110" height="60" class="n-amber"/>
+      <text x="95" y="104" text-anchor="middle" class="t-sm">C: 40 pages</text>
+      <rect x="40" y="30" width="110" height="40" class="n-red"/>
+      <text x="95" y="54" text-anchor="middle" class="t-sm t-red">D: no room</text>
+      <text x="165" y="80" class="t-sm">A's details sit next</text>
+      <text x="165" y="96" class="t-sm">to C's reasoning.</text>
+      <text x="165" y="124" class="t-sm t-muted">Quality falls as the</text>
+      <text x="165" y="140" class="t-sm t-muted">window fills (ch06).</text>
+      <text x="165" y="196" class="t-sm t-muted">Every later step pays</text>
+      <text x="165" y="212" class="t-sm t-muted">to re-read all of it.</text>
+
+      <line x1="338" y1="20" x2="338" y2="285" class="e-muted e-dash"/>
+
+      <text x="360" y="22" class="t-b">Lead + three workers</text>
+      <rect x="455" y="40" width="170" height="54" rx="6" class="n-thick"/>
+      <text x="540" y="62" text-anchor="middle" class="t-b">Lead</text>
+      <text x="540" y="80" text-anchor="middle" class="t-xs t-muted">plan + 3 one-page summaries</text>
+
+      <rect x="372" y="184" width="96" height="90" rx="6"/>
+      <text x="420" y="204" text-anchor="middle" class="t-b">Worker A</text>
+      <rect x="384" y="214" width="72" height="48" class="n-accent"/>
+      <text x="420" y="242" text-anchor="middle" class="t-xs">40 pages</text>
+      <rect x="492" y="184" width="96" height="90" rx="6"/>
+      <text x="540" y="204" text-anchor="middle" class="t-b">Worker B</text>
+      <rect x="504" y="214" width="72" height="48" class="n-violet"/>
+      <text x="540" y="242" text-anchor="middle" class="t-xs">40 pages</text>
+      <rect x="612" y="184" width="96" height="90" rx="6"/>
+      <text x="660" y="204" text-anchor="middle" class="t-b">Worker C</text>
+      <rect x="624" y="214" width="72" height="48" class="n-amber"/>
+      <text x="660" y="242" text-anchor="middle" class="t-xs">40 pages</text>
+
+      <line x1="480" y1="94" x2="410" y2="182" marker-end="url(#f141-ah)"/>
+      <line x1="530" y1="94" x2="530" y2="182" marker-end="url(#f141-ah)"/>
+      <line x1="590" y1="94" x2="650" y2="182" marker-end="url(#f141-ah)"/>
+      <line x1="436" y1="182" x2="500" y2="96" class="e-accent" marker-end="url(#f141-aha)"/>
+      <line x1="552" y1="182" x2="552" y2="96" class="e-accent" marker-end="url(#f141-aha)"/>
+      <line x1="672" y1="182" x2="612" y2="96" class="e-accent" marker-end="url(#f141-aha)"/>
+      <text x="372" y="140" class="t-xs">brief ↓</text>
+      <text x="644" y="140" class="t-xs t-accent">↑ summary</text>
+      <text x="540" y="292" text-anchor="middle" class="t-xs t-muted">each worker's window is discarded when it returns</text>
+    </svg></div>
+    <figcaption><b>Figure 14.1</b> Context isolation. On the left, one window holds every subtopic at once and runs out of room. On the right, the same reading is spread across three fresh windows, and the lead holds only the distilled results. Total tokens go <em>up</em> (four windows instead of one), but no single window is overloaded.</figcaption>
+  </figure>
+
+  <p>Notice what isolation does <em>not</em> do. It does not reduce total work. It spends more tokens overall to keep each window small. It is the multi-agent version of a technique from chapter 06: compaction, applied before the context is written rather than after.</p>
+
+  <div class="box pitfall">
+    <span class="box-label">Pitfall</span>
+    <p>Isolation works only if the summary is good. A child that returns forty pages of raw text has defeated the point; a child that returns one vague line has thrown away the evidence. The return contract (chapter 16) is where you decide what “distilled” means.</p>
+  </div>
+
+  <h2 id="parallelism">Reason 2: parallelism</h2>
+  <p>When the parts of a task do not depend on each other, nothing forces you to do them one after another. Because model calls are I/O-bound (you wait on the network, not the CPU), you can run them concurrently from a single process. Chapter 10 covers the mechanics with <code>asyncio</code>.</p>
+
+  <figure class="fig"><div class="fig-frame">
+    <svg class="dg wide" viewBox="0 0 720 240" role="img" aria-label="Timeline drawn to scale. Sequential: plan 5 s, A 30 s, B 22 s, C 28 s, synthesis 10 s, total 95 s. Parallel: plan 5 s, then A, B and C at the same time, then synthesis after the slowest, total 45 s.">
+      <text x="20" y="46" class="t-b">Sequential</text>
+      <rect x="120" y="30" width="25" height="24" class="n-sunken"/>
+      <rect x="145" y="30" width="150" height="24" class="n-accent"/>
+      <text x="220" y="46" text-anchor="middle" class="t-sm">A 30 s</text>
+      <rect x="295" y="30" width="110" height="24" class="n-violet"/>
+      <text x="350" y="46" text-anchor="middle" class="t-sm">B 22 s</text>
+      <rect x="405" y="30" width="140" height="24" class="n-amber"/>
+      <text x="475" y="46" text-anchor="middle" class="t-sm">C 28 s</text>
+      <rect x="545" y="30" width="50" height="24" class="n-sunken"/>
+      <text x="570" y="46" text-anchor="middle" class="t-xs">synth</text>
+      <text x="605" y="46" class="t-b">95 s</text>
+
+      <text x="20" y="140" class="t-b">Parallel</text>
+      <rect x="120" y="90" width="25" height="90" class="n-sunken"/>
+      <text x="132" y="196" text-anchor="middle" class="t-xs t-muted">plan</text>
+      <rect x="145" y="92" width="150" height="24" class="n-accent"/>
+      <text x="220" y="108" text-anchor="middle" class="t-sm">A 30 s</text>
+      <rect x="145" y="123" width="110" height="24" class="n-violet"/>
+      <text x="200" y="139" text-anchor="middle" class="t-sm">B 22 s</text>
+      <line x1="255" y1="135" x2="295" y2="135" class="e-muted e-dash"/>
+      <rect x="145" y="154" width="140" height="24" class="n-amber"/>
+      <text x="215" y="170" text-anchor="middle" class="t-sm">C 28 s</text>
+      <line x1="285" y1="166" x2="295" y2="166" class="e-muted e-dash"/>
+      <rect x="295" y="90" width="50" height="90" class="n-sunken"/>
+      <text x="320" y="196" text-anchor="middle" class="t-xs t-muted">synth</text>
+      <text x="355" y="128" class="t-b">45 s</text>
+      <text x="355" y="146" class="t-sm t-muted">= plan + max(A, B, C) + synth</text>
+      <text x="355" y="164" class="t-sm t-muted">dashes: B and C wait for A</text>
+
+      <line x1="120" y1="214" x2="620" y2="214" class="e-line"/>
+      <line x1="120" y1="210" x2="120" y2="218" class="e-line"/><text x="120" y="232" text-anchor="middle" class="t-xs t-muted">0</text>
+      <line x1="220" y1="210" x2="220" y2="218" class="e-line"/><text x="220" y="232" text-anchor="middle" class="t-xs t-muted">20</text>
+      <line x1="320" y1="210" x2="320" y2="218" class="e-line"/><text x="320" y="232" text-anchor="middle" class="t-xs t-muted">40</text>
+      <line x1="420" y1="210" x2="420" y2="218" class="e-line"/><text x="420" y="232" text-anchor="middle" class="t-xs t-muted">60</text>
+      <line x1="520" y1="210" x2="520" y2="218" class="e-line"/><text x="520" y="232" text-anchor="middle" class="t-xs t-muted">80</text>
+      <line x1="620" y1="210" x2="620" y2="218" class="e-line"/><text x="620" y="232" text-anchor="middle" class="t-xs t-muted">100 s</text>
+    </svg></div>
+    <figcaption><b>Figure 14.2</b> Parallelism, drawn to scale (5 px per second). Sequential time is the <em>sum</em> of the parts; parallel time is the <em>slowest</em> part plus the fixed steps around it. The token bill is identical in both rows: parallelism buys time, not money.</figcaption>
+  </figure>
+
+  <div class="formula">T<sub>sequential</sub> = t<sub>plan</sub> + Σ t<sub>i</sub> + t<sub>synth</sub> &nbsp;&nbsp;vs&nbsp;&nbsp; T<sub>parallel</sub> = t<sub>plan</sub> + max(t<sub>i</sub>) + t<sub>synth</sub></div>
+
+  <p>Two consequences fall out of the <code>max</code>:</p>
+  <ul>
+    <li><strong>Stragglers set the pace.</strong> One child stuck in a retry loop holds up every result. Per-child timeouts are not optional in a parallel system (chapter 11).</li>
+    <li><strong>The fixed steps don't shrink.</strong> Planning and synthesis are sequential by nature. If they dominate, parallelism barely helps. This is Amdahl's law in miniature: the speed-up is capped by the part you cannot parallelize.</li>
+  </ul>
+
+  <h2 id="specialization">Reason 3: specialization</h2>
+  <p>A specialist agent has a prompt written for one job and only the tools that job needs. Fewer tools means fewer wrong tool choices; a shorter prompt means fewer competing instructions. It also limits damage: a critic with no write tools cannot break anything.</p>
+
+  <figure class="fig"><div class="fig-frame">
+    <svg class="dg wide" viewBox="0 0 720 220" role="img" aria-label="A lead agent connected to three specialists. Searcher: prompt says cite primary sources, tools web_search and fetch_url. Analyst: prompt says compute and show work, tool run_python. Critic: prompt says check against a rubric, no tools.">
+      <defs>
+        <marker id="f143-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect x="30" y="82" width="130" height="56" rx="6" class="n-thick"/>
+      <text x="95" y="106" text-anchor="middle" class="t-b">Lead</text>
+      <text x="95" y="124" text-anchor="middle" class="t-xs t-muted">routes by subtask</text>
+
+      <rect x="260" y="16" width="430" height="54" rx="6"/>
+      <text x="276" y="38" class="t-b t-accent">Searcher</text>
+      <text x="370" y="38" class="t-sm">prompt: “cite primary sources; no opinions”</text>
+      <text x="370" y="58" class="t-mono">tools: web_search, fetch_url</text>
+
+      <rect x="260" y="83" width="430" height="54" rx="6"/>
+      <text x="276" y="105" class="t-b t-violet">Analyst</text>
+      <text x="370" y="105" class="t-sm">prompt: “compute it, show your working”</text>
+      <text x="370" y="125" class="t-mono">tools: run_python</text>
+
+      <rect x="260" y="150" width="430" height="54" rx="6"/>
+      <text x="276" y="172" class="t-b t-amber">Critic</text>
+      <text x="370" y="172" class="t-sm">prompt: “list gaps against this rubric”</text>
+      <text x="370" y="192" class="t-mono">tools: none (read-only by design)</text>
+
+      <line x1="160" y1="98" x2="258" y2="45" marker-end="url(#f143-ah)"/>
+      <line x1="160" y1="110" x2="258" y2="110" marker-end="url(#f143-ah)"/>
+      <line x1="160" y1="122" x2="258" y2="176" marker-end="url(#f143-ah)"/>
+    </svg></div>
+    <figcaption><b>Figure 14.3</b> Specialization: each agent's prompt and tool list are narrowed to its job. The critic's empty tool list is a safety property as well as a focus property.</figcaption>
+  </figure>
+
+  <p>Be sceptical of this reason on its own. A single agent can also switch prompts, and a router (chapter 02) can pick a specialist prompt without a second loop. Specialization justifies a separate <em>agent</em> mainly when the specialist also needs its own context (reason 1) or its own permissions (chapter 12). Splitting work into “roles” because a human team would do it that way is a common design smell.</p>
+
+  <h2 id="evidence">The evidence: Anthropic's research system</h2>
+  <p>The most detailed public account of a production multi-agent system is Anthropic's write-up of the Research feature in Claude (2025). A lead agent plans, spawns subagents that search in parallel, and synthesizes their findings. Four numbers from it are worth memorising, along with the limits on each.</p>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th>Finding (as reported)</th><th>What it means</th><th>Caveat</th></tr></thead>
+    <tbody>
+      <tr><td>A lead on Claude Opus 4 with Claude Sonnet 4 subagents scored about <strong>90% higher</strong> than a single-agent Claude Opus 4.</td><td>On breadth-first research, splitting helped a lot.</td><td>Their own internal research eval, not a public benchmark.</td></tr>
+      <tr><td>On BrowseComp, <strong>token usage alone explained about 80%</strong> of the variance in performance; tool-call count and model choice explained most of the rest.</td><td>Much of the gain comes from simply spending more tokens, spread across windows.</td><td>“More tokens” is the mechanism, so cost scales with quality.</td></tr>
+      <tr><td>Agents used about <strong>4×</strong> the tokens of a chat; the multi-agent system about <strong>15×</strong>.</td><td>The bill is large and predictable.</td><td>Only worth it when the task's value is high.</td></tr>
+      <tr><td>Parallel subagents (and parallel tool calls inside them) cut research time by <strong>up to 90%</strong> on complex queries.</td><td>Parallelism (reason 2) is real.</td><td>“Up to”: the best case, on the widest tasks.</td></tr>
+    </tbody>
+  </table></div>
+
+  <figure class="fig"><div class="fig-frame">
+    <svg class="dg wide" viewBox="0 0 720 170" role="img" aria-label="Bar chart to scale of tokens relative to a chat: chat 1 times, single agent about 4 times, multi-agent about 15 times.">
+      <text x="20" y="22" class="t-b">Tokens used, relative to one chat (to scale)</text>
+      <text x="150" y="58" text-anchor="end" class="t-sm">Chat</text>
+      <rect x="160" y="44" width="32" height="20" class="fill-muted"/>
+      <text x="200" y="59" class="t-sm">1×</text>
+      <text x="150" y="96" text-anchor="end" class="t-sm">Single agent</text>
+      <rect x="160" y="82" width="128" height="20" class="fill-accent"/>
+      <text x="296" y="97" class="t-sm">≈ 4×</text>
+      <text x="150" y="134" text-anchor="end" class="t-sm">Multi-agent</text>
+      <rect x="160" y="120" width="480" height="20" class="fill-amber"/>
+      <text x="648" y="135" class="t-sm t-b">≈ 15×</text>
+      <line x1="160" y1="36" x2="160" y2="150" class="e-line"/>
+      <text x="160" y="164" class="t-xs t-muted">source: Anthropic, “How we built our multi-agent research system” (2025)</text>
+    </svg></div>
+    <figcaption><b>Figure 14.4</b> The token bill. If token usage is the main driver of quality, multi-agent systems are partly a way to spend more tokens usefully, because one window cannot absorb that many without degrading.</figcaption>
+  </figure>
+
+  <p>The same write-up is just as useful for what went wrong. Early versions spawned around fifty subagents for simple queries, searched endlessly for sources that did not exist, and distracted each other with too many updates. The fix was not clever code; it was explicit effort rules in the lead's prompt (roughly: one agent for a simple fact, a few for a comparison, many only for genuinely complex research) plus hard limits in the harness. The authors also say plainly that tasks needing all agents to share the same context, or with many dependencies between agents, are a poor fit, and they name most coding tasks as an example.</p>
+
+  <h2 id="costs">The four costs</h2>
+  <p>Every split adds the same four costs. None of them is a bug you can fix once; each is a quantity you manage.</p>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th>Cost</th><th>Where it comes from</th><th>What it looks like in a trace</th><th>Main lever</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Tokens</strong></td><td>Every child re-reads its own system prompt, tools and brief; the lead re-reads every summary.</td><td>Total tokens far above the single-agent run for the same question.</td><td>Spawn limits; cheaper models for children; skip spawning for easy tasks.</td></tr>
+      <tr><td><strong>Coordination latency</strong></td><td>Planning, waiting for the slowest child, then synthesis. In a synchronous design the lead is idle while children run.</td><td>Long gaps in the lead's span; one child's span much longer than its siblings'.</td><td>Timeouts; optional children; streaming partial results.</td></tr>
+      <tr><td><strong>Error compounding</strong></td><td>A chain of steps succeeds only if every link succeeds.</td><td>A wrong plan early produces correct-looking work on the wrong question.</td><td>Validate at each boundary; keep chains short.</td></tr>
+      <tr><td><strong>Information loss</strong></td><td>A summary is a lossy compression. Decisions made inside a child are invisible to its siblings.</td><td>Children's outputs that contradict each other or don't fit together.</td><td>Better briefs; richer return contracts; fewer, larger splits.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Error compounding, drawn to scale</h3>
+  <p>If each step in a chain has probability <em>p</em> of being right, and the steps fail independently, the whole chain is right with probability p<sup>n</sup>. Small per-step error rates become large end-to-end ones.</p>
+
+  <figure class="fig"><div class="fig-frame">
+    <svg class="dg wide" viewBox="0 0 720 280" role="img" aria-label="Line chart of p to the power n for n from 1 to 10. p equals 0.99 falls to 0.90 at n equals 10. p equals 0.95 falls to 0.60. p equals 0.90 falls to 0.35.">
+      <line x1="80" y1="30" x2="80" y2="230" class="e-line"/>
+      <line x1="80" y1="230" x2="640" y2="230" class="e-line"/>
+      <line x1="80" y1="130" x2="640" y2="130" class="e-muted e-dash"/>
+      <line x1="80" y1="30" x2="640" y2="30" class="e-muted e-dash"/>
+      <text x="70" y="34" text-anchor="end" class="t-xs t-muted">100%</text>
+      <text x="70" y="134" text-anchor="end" class="t-xs t-muted">50%</text>
+      <text x="70" y="234" text-anchor="end" class="t-xs t-muted">0%</text>
+      <text x="80" y="250" text-anchor="middle" class="t-xs t-muted">1</text>
+      <text x="200" y="250" text-anchor="middle" class="t-xs t-muted">3</text>
+      <text x="320" y="250" text-anchor="middle" class="t-xs t-muted">5</text>
+      <text x="440" y="250" text-anchor="middle" class="t-xs t-muted">7</text>
+      <text x="560" y="250" text-anchor="middle" class="t-xs t-muted">9</text>
+      <text x="620" y="250" text-anchor="middle" class="t-xs t-muted">10</text>
+      <text x="360" y="272" text-anchor="middle" class="t-sm">n = number of steps or handoffs in the chain</text>
+
+      <polyline points="80,32 140,34 200,36 260,37.8 320,39.8 380,41.8 440,43.6 500,45.4 560,47.2 620,49.2" class="e-accent e-thick"/>
+      <polyline points="80,40 140,49.5 200,58.6 260,67 320,75.2 380,83 440,90.4 500,97.4 560,104 620,110.2" class="e-amber e-thick"/>
+      <polyline points="80,50 140,68 200,84.2 260,98.8 320,112 380,123.8 440,134.4 500,144 560,152.6 620,160.2" class="e-red e-thick"/>
+      <circle cx="620" cy="49.2" r="3.5" class="n-accent"/>
+      <circle cx="620" cy="110.2" r="3.5" class="n-amber"/>
+      <circle cx="620" cy="160.2" r="3.5" class="n-red"/>
+      <text x="628" y="53" class="t-sm t-accent">p 0.99 → 90%</text>
+      <text x="628" y="114" class="t-sm t-amber">p 0.95 → 60%</text>
+      <text x="628" y="164" class="t-sm t-red">p 0.90 → 35%</text>
+    </svg></div>
+    <figcaption><b>Figure 14.5</b> p<sup>n</sup> for three per-step success rates, plotted to scale. Eight handoffs at 95% each give 0.95<sup>8</sup> ≈ 66%: one run in three is wrong somewhere. The model assumes independent failures and a chain in which every link matters; real systems are messier in both directions.</figcaption>
+  </figure>
+
+  <p>The model cuts both ways, which is worth seeing clearly:</p>
+  <div class="cols-2">
+    <div class="card"><p><strong>In series, more agents hurt.</strong> A plan → research → summary → synthesis chain multiplies the chance of a wrong link. Deep delegation trees are chains: a grandchild's error passes through its parent and then the root.</p></div>
+    <div class="card"><p><strong>In parallel, more agents can help.</strong> If <em>k</em> independent attempts each succeed with probability <em>p</em>, and you can <em>check</em> which one succeeded, at least one succeeds with probability 1 − (1 − p)<sup>k</sup>. Voting and best-of-k rely on this, but only when you have a reliable checker.</p></div>
+  </div>
+
+  <h2 id="info-loss" data-short="The counter-argument">Information loss: the counter-argument</h2>
+  <p>In 2025 Walden Yan of Cognition (the company behind the Devin coding agent) published <em>Don't Build Multi-Agents</em>, a deliberate counterweight to the enthusiasm. Its argument rests on two principles:</p>
+  <ol>
+    <li><strong>Share context, and share full agent traces</strong>, not just individual messages. A one-line brief cannot carry what the parent knows.</li>
+    <li><strong>Actions carry implicit decisions, and conflicting decisions carry bad results.</strong> Every choice a child makes (a style, a naming scheme, an assumption) is a decision its siblings never saw.</li>
+  </ol>
+  <p>Its example: split “build a Flappy Bird clone” into two subtasks and run them in parallel.</p>
+
+  <figure class="fig"><div class="fig-frame">
+    <svg class="dg wide" viewBox="0 0 720 250" role="img" aria-label="A task, build a Flappy Bird clone, splits into subagent 1 building the background and pipes, and subagent 2 building the bird. Subagent 1 builds a Super Mario style background. Subagent 2 builds a bird that does not look or move like Flappy Bird. The combiner receives two pieces that do not fit.">
+      <defs>
+        <marker id="f146-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="f146-ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-red" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect x="250" y="12" width="220" height="40" rx="6" class="n-thick"/>
+      <text x="360" y="37" text-anchor="middle" class="t-b">“Build a Flappy Bird clone”</text>
+
+      <rect x="40" y="90" width="250" height="44" rx="6"/>
+      <text x="165" y="109" text-anchor="middle" class="t-b">Subagent 1</text>
+      <text x="165" y="125" text-anchor="middle" class="t-xs t-muted">brief: background with pipes and hit boxes</text>
+      <rect x="430" y="90" width="250" height="44" rx="6"/>
+      <text x="555" y="109" text-anchor="middle" class="t-b">Subagent 2</text>
+      <text x="555" y="125" text-anchor="middle" class="t-xs t-muted">brief: a bird that moves up and down</text>
+
+      <rect x="40" y="160" width="250" height="40" rx="6" class="n-amber"/>
+      <text x="165" y="179" text-anchor="middle" class="t-sm">background in Super Mario style</text>
+      <text x="165" y="194" text-anchor="middle" class="t-xs">implicit decision: art style X</text>
+      <rect x="430" y="160" width="250" height="40" rx="6" class="n-violet"/>
+      <text x="555" y="179" text-anchor="middle" class="t-sm">bird unlike Flappy Bird's, own physics</text>
+      <text x="555" y="194" text-anchor="middle" class="t-xs">implicit decision: art style Y</text>
+
+      <rect x="250" y="210" width="220" height="34" rx="6" class="n-red"/>
+      <text x="360" y="232" text-anchor="middle" class="t-sm t-b">combiner: pieces don't fit</text>
+
+      <line x1="300" y1="52" x2="200" y2="88" marker-end="url(#f146-ah)"/>
+      <line x1="420" y1="52" x2="520" y2="88" marker-end="url(#f146-ah)"/>
+      <line x1="165" y1="134" x2="165" y2="158" marker-end="url(#f146-ah)"/>
+      <line x1="555" y1="134" x2="555" y2="158" marker-end="url(#f146-ah)"/>
+      <line x1="290" y1="200" x2="320" y2="208" class="e-red" marker-end="url(#f146-ahr)"/>
+      <line x1="430" y1="200" x2="400" y2="208" class="e-red" marker-end="url(#f146-ahr)"/>
+      <line x1="300" y1="112" x2="420" y2="112" class="e-muted e-dash"/>
+      <text x="360" y="104" text-anchor="middle" class="t-xs t-muted">no channel</text>
+    </svg></div>
+    <figcaption><b>Figure 14.6</b> The Flappy Bird example from Cognition's essay. Each subagent did a reasonable job of its brief. The failure is in the decisions neither brief mentioned, which each child made alone. No amount of child quality fixes a split that leaves shared decisions unshared.</figcaption>
+  </figure>
+
+  <p>The essay's recommendation is a single-threaded agent, with a separate model compressing old history when the context gets long. It notes that Claude Code's subagents are used to answer questions and investigate, not to write code in parallel with the main agent.</p>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p>The two essays do not contradict each other. Anthropic's system does breadth-first <em>reading</em>: children gather facts, and facts from different sources combine cleanly. Cognition's example is coupled <em>writing</em>: children make choices, and choices from different authors clash. The question to ask about any split is “do the parts need to agree on decisions that aren't in the brief?”</p>
+  </div>
+
+  <h2 id="task-shape">Wide tasks and deep tasks</h2>
+  <p>That question sorts tasks into two shapes. <strong>Wide</strong> (breadth-first) tasks have many parts that each need little of the others' context. <strong>Deep</strong> (depth-first) tasks are a sequence in which each step depends on what earlier steps decided.</p>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th>Task</th><th>Shape</th><th>Shared context the parts need</th><th>Multi-agent fit</th></tr></thead>
+    <tbody>
+      <tr><td>List the board members of every IT company in the S&amp;P 500 (Anthropic's example)</td><td>Wide</td><td>Almost none: each company is independent</td><td>Good</td></tr>
+      <tr><td>Check 40 contracts for an indemnity clause</td><td>Wide</td><td>The clause definition only</td><td>Good, though a fixed parallel workflow (ch02) may be enough</td></tr>
+      <tr><td>Explore a large codebase, then one agent makes the change</td><td>Wide reading, deep writing</td><td>Children only read and report</td><td>Good if the children never write</td></tr>
+      <tr><td>Build a small game whose parts must fit together</td><td>Deep</td><td>Style, interfaces and assumptions</td><td>Poor</td></tr>
+      <tr><td>Debug an intermittent race condition</td><td>Deep</td><td>The whole investigation so far</td><td>Poor: one agent, careful context management</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2 id="decision" data-short="Decision checklist">A decision checklist</h2>
+  <p>Work through the questions in order. Any “no” sends you to a cheaper option. Notice that the last question is about measurement, not architecture.</p>
+
+  <figure class="fig"><div class="fig-frame">
+    <svg class="dg wide" viewBox="0 0 720 460" role="img" aria-label="Flowchart. Question 1: does a well-tooled single agent fail at this task? If no, stay single. Question 2: can the work split into parts that need little shared context? If no, use a single agent with context management. Question 3: is the result worth several times the tokens? If no, use a fixed parallel workflow or cheaper models. Question 4: can you measure both designs on the same eval? If no, build the eval first. If yes, build multi-agent with a single-agent baseline beside it.">
+      <defs>
+        <marker id="f147-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="f147-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="f147-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect x="30" y="20" width="320" height="56" rx="6"/>
+      <text x="190" y="44" text-anchor="middle" class="t-b">1 · Does a well-tooled single agent</text>
+      <text x="190" y="62" text-anchor="middle" class="t-b">fail at this task, measurably?</text>
+      <rect x="30" y="116" width="320" height="56" rx="6"/>
+      <text x="190" y="140" text-anchor="middle" class="t-b">2 · Does the work split into parts that</text>
+      <text x="190" y="158" text-anchor="middle" class="t-b">need little of each other's context?</text>
+      <rect x="30" y="212" width="320" height="56" rx="6"/>
+      <text x="190" y="236" text-anchor="middle" class="t-b">3 · Is a better result worth several</text>
+      <text x="190" y="254" text-anchor="middle" class="t-b">times the tokens and latency?</text>
+      <rect x="30" y="308" width="320" height="56" rx="6"/>
+      <text x="190" y="332" text-anchor="middle" class="t-b">4 · Can you score both designs on</text>
+      <text x="190" y="350" text-anchor="middle" class="t-b">the same eval (ch13)?</text>
+      <rect x="30" y="400" width="320" height="48" rx="6" class="n-accent"/>
+      <text x="190" y="420" text-anchor="middle" class="t-b">Build multi-agent, with the single-agent</text>
+      <text x="190" y="437" text-anchor="middle" class="t-b">baseline kept running beside it</text>
+
+      <rect x="420" y="24" width="280" height="48" rx="6" class="n-sunken"/>
+      <text x="560" y="44" text-anchor="middle" class="t-sm">Stay single. Improve tools,</text>
+      <text x="560" y="61" text-anchor="middle" class="t-sm">prompts and context first.</text>
+      <rect x="420" y="120" width="280" height="48" rx="6" class="n-sunken"/>
+      <text x="560" y="140" text-anchor="middle" class="t-sm">One agent with compaction and</text>
+      <text x="560" y="157" text-anchor="middle" class="t-sm">notes (ch06). Maybe read-only helpers.</text>
+      <rect x="420" y="216" width="280" height="48" rx="6" class="n-sunken"/>
+      <text x="560" y="236" text-anchor="middle" class="t-sm">Fixed parallel workflow (ch02),</text>
+      <text x="560" y="253" text-anchor="middle" class="t-sm">or cheaper models for the parts.</text>
+      <rect x="420" y="312" width="280" height="48" rx="6" class="n-amber"/>
+      <text x="560" y="332" text-anchor="middle" class="t-sm">Build the eval first. Without it</text>
+      <text x="560" y="349" text-anchor="middle" class="t-sm">you cannot tell if the split helped.</text>
+
+      <line x1="190" y1="76" x2="190" y2="114" marker-end="url(#f147-ah)"/><text x="198" y="100" class="t-xs">yes</text>
+      <line x1="190" y1="172" x2="190" y2="210" marker-end="url(#f147-ah)"/><text x="198" y="196" class="t-xs">yes</text>
+      <line x1="190" y1="268" x2="190" y2="306" marker-end="url(#f147-ah)"/><text x="198" y="292" class="t-xs">yes</text>
+      <line x1="190" y1="364" x2="190" y2="398" class="e-accent" marker-end="url(#f147-aha)"/><text x="198" y="386" class="t-xs t-accent">yes</text>
+      <line x1="350" y1="48" x2="418" y2="48" class="e-muted" marker-end="url(#f147-ahm)"/><text x="384" y="42" text-anchor="middle" class="t-xs t-muted">no</text>
+      <line x1="350" y1="144" x2="418" y2="144" class="e-muted" marker-end="url(#f147-ahm)"/><text x="384" y="138" text-anchor="middle" class="t-xs t-muted">no</text>
+      <line x1="350" y1="240" x2="418" y2="240" class="e-muted" marker-end="url(#f147-ahm)"/><text x="384" y="234" text-anchor="middle" class="t-xs t-muted">no</text>
+      <line x1="350" y1="336" x2="418" y2="336" class="e-muted" marker-end="url(#f147-ahm)"/><text x="384" y="330" text-anchor="middle" class="t-xs t-muted">no</text>
+    </svg></div>
+    <figcaption><b>Figure 14.7</b> The decision checklist. Each “no” exits to something cheaper. The most common mistake is skipping question 1: building a swarm before showing that one agent fails.</figcaption>
+  </figure>
+
+  <div class="box pitfall">
+    <span class="box-label">Pitfall</span>
+    <p>“It's a learning project, so the checklist doesn't apply.” It applies more. If you never run the single-agent baseline, you will not learn whether your harness's recursion actually earned its cost, which is the most interesting result your project can produce.</p>
+  </div>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Stage 5, Experiment 001.</strong> Your question is “Explain the architecture of a modern RAG system”. Before you run it: which of the three reasons applies to this question, and how strongly? Is it wide or deep? Write your prediction down.</li>
+      <li><strong>Stage 5, baseline.</strong> Run the same question through a single agent with the same tools and the same total token budget. Record tokens, wall-clock time and a quality score for both. What score difference would convince you the recursion was worth it? Decide the threshold <em>before</em> you look.</li>
+      <li><strong>Stage 6.</strong> Which of the four costs can you already see in your traces? Which one would you not notice without a dedicated metric?</li>
+      <li><strong>Design question.</strong> Your children return summaries. What would the Flappy Bird failure look like in a <em>research</em> task: which implicit decisions could two sibling researchers make differently?</li>
+    </ul>
+  </div>
+
+  <h2 id="check">Check yourself</h2>
+  <p>Answer each one out loud or on paper before you open it.</p>
+  <div class="quiz">
+    <details><summary><span class="tag recall">Recall</span> Name the three reasons to use multiple agents and the four costs.</summary><div><p>Reasons: context isolation, parallelism, specialization. Costs: tokens, coordination latency, error compounding, information loss.</p></div></details>
+    <details><summary><span class="tag recall">Recall</span> Does context isolation reduce the total number of tokens used?</summary><div><p>No. It increases the total (several windows, each with its own system prompt and brief) to keep each individual window small and focused. It trades money for quality per window.</p></div></details>
+    <details><summary><span class="tag apply">Apply</span> Plan 5 s, parts of 30, 22 and 28 s, synthesis 10 s. Sequential and parallel wall-clock?</summary><div><p>Sequential: 5 + 30 + 22 + 28 + 10 = 95 s. Parallel: 5 + max(30, 22, 28) + 10 = 45 s. The token cost is the same in both.</p></div></details>
+    <details><summary><span class="tag apply">Apply</span> Eight handoffs, each 95% reliable and independent. End-to-end reliability?</summary><div><p>0.95<sup>8</sup> ≈ 0.66. Roughly one run in three has a wrong link somewhere. At 0.99 per step it would be about 0.92.</p></div></details>
+    <details><summary><span class="tag apply">Apply</span> Three independent attempts, each right 60% of the time, with a perfect checker. Chance at least one is right?</summary><div><p>1 − 0.4<sup>3</sup> = 1 − 0.064 ≈ 0.94. Without a checker you can't tell which one is right, so the gain depends on how good the checker or vote is.</p></div></details>
+    <details><summary><span class="tag design">Design</span> Why did Anthropic's research system work while Cognition argues against multi-agent coding?</summary><div><p>Research is wide reading: facts from independent sources combine cleanly, and children make few decisions that siblings depend on. Coding is coupled writing: each child makes implicit decisions (style, interfaces, assumptions) that the others must agree with but never see.</p></div></details>
+    <details><summary><span class="tag design">Design</span> Your lead spawns 12 children for “What year was the transformer paper published?” What went wrong, and where should the fix live?</summary><div><p>Effort was not scaled to the task. Fix it in two places: guidance in the lead's prompt about how many children each kind of task deserves, and a hard limit enforced by the harness, so a bad plan cannot spend the budget even if the prompt is ignored.</p></div></details>
+    <details><summary><span class="tag interview">Interview</span> “Should we make our support bot multi-agent?” How do you answer?</summary><div><p>Start with the checklist. Does a single agent with good tools fail measurably? Is the task wide? Support conversations are usually deep (each turn depends on earlier ones), latency-sensitive and high-volume, which makes a 15× token multiple hard to justify. Propose a measured single-agent baseline first, then test a split (for example, read-only retrieval helpers) against it on the same eval.</p></div></details>
+  </div>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><strong>J. Hadfield, B. Zhang, K. Lien, F. Scholz, J. Fox, D. Ford, “How we built our multi-agent research system”</strong> (Anthropic Engineering, June 2025).<span class="why">The 90%, 80%-of-variance, 4× and 15× figures; the effort-scaling rules; the early failure modes; why coding is a poor fit.</span></li>
+    <li><strong>W. Yan, “Don't Build Multi-Agents”</strong> (Cognition blog, June 2025).<span class="why">The two context-sharing principles and the Flappy Bird example. Read it straight after the Anthropic post.</span></li>
+    <li><strong>E. Schluntz, B. Zhang, “Building effective agents”</strong> (Anthropic, December 2024).<span class="why">The case for starting simple, and the workflow patterns to try before agents.</span></li>
+    <li><strong>M. Cemri et al., “Why Do Multi-Agent LLM Systems Fail?”</strong> (arXiv 2503.13657, 2025).<span class="why">A failure taxonomy (MAST) across many systems. Covered in depth in chapter 19.</span></li>
+    <li><strong>J. Li et al., “More Agents Is All You Need”</strong> (arXiv 2402.05120, 2024).<span class="why">Sampling and voting: how accuracy scales with the number of parallel attempts.</span></li>
+  </ul>
+
+  <section class="recall-card" aria-labelledby="recall-14">
+    <h2 id="recall-14" data-short="Recall card">Recall card</h2>
+    <p class="muted small">Five lines to rehearse. If you can expand each into a minute of explanation, you know this chapter.</p>
+    <ol>
+      <li>Three reasons: isolate context, run in parallel, specialize. Four costs: tokens, latency, compounding, information loss.</li>
+      <li>Isolation spends more tokens in total to keep each window small; parallel time is the max, not the sum.</li>
+      <li>Anthropic: about 90% better on wide research, token usage explains about 80% of variance, about 15× the tokens of chat.</li>
+      <li>Cognition: share full context; actions carry implicit decisions; conflicting decisions give bad results.</li>
+      <li>Wide reading splits well; deep, coupled writing doesn't. Default to one agent and measure against it.</li>
+    </ol>
+  </section>
+
+  <div class="done">
+    <input type="checkbox" id="done-toggle" data-chapter="14">
+    <label for="done-toggle">I can explain this chapter without notes<small>Saved in this browser only. It updates the count on the guide's home page.</small></label>
+  </div>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="13-observability-and-evals.html"><small>Previous · Chapter 13</small>Observability and evaluation</a>
+    <a class="next" href="15-topologies.html"><small>Next · Chapter 15</small>Multi-agent topologies</a>
+  </nav>
+
+</main>
+<aside class="toc-rail" aria-label="On this page"><p class="toc-title">In this chapter</p><nav data-toc></nav></aside>
+</div>
+</body>
+</html>

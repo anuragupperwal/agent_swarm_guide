@@ -1,0 +1,41 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>body{margin:0;font:12px monospace}iframe{border:0;width:375px;display:block}#out{white-space:pre-wrap;padding:8px}</style></head>
+<body>
+<div id="out">pending</div>
+<iframe id="f" height="20000"></iframe>
+<script>
+// Usage: phone.html?page=<absolute file path>
+var page = new URLSearchParams(location.search).get("page");
+var f = document.getElementById("f");
+f.src = "file://" + page;
+f.onload = function () {
+  setTimeout(function () {
+    var d = f.contentDocument, out = [];
+    var vw = d.documentElement.clientWidth;
+    out.push("viewport=" + vw + " scrollWidth=" + d.documentElement.scrollWidth);
+    // Elements whose right edge passes the viewport and are not inside a scroll container
+    var all = d.body.querySelectorAll("*");
+    var n = 0;
+    for (var i = 0; i < all.length && n < 15; i++) {
+      var el = all[i], r = el.getBoundingClientRect();
+      if (r.right > vw + 1 && r.width > 0) {
+        var p = el.parentElement, clipped = false;
+        while (p && p !== d.body) {
+          var ox = getComputedStyle(p).overflowX;
+          if (ox === "auto" || ox === "scroll" || ox === "hidden") { clipped = true; break; }
+          p = p.parentElement;
+        }
+        if (!clipped && !(el.closest && el.closest("svg") && el.tagName.toLowerCase() !== "svg")) {
+          out.push("OVERFLOW " + el.tagName.toLowerCase() + (el.className && typeof el.className === "string" ? "." + el.className.split(" ").join(".") : "") + " right=" + Math.round(r.right));
+          n++;
+        }
+      }
+    }
+    var h = d.documentElement.scrollHeight;
+    f.height = h;
+    out.push("height=" + h);
+    document.getElementById("out").textContent = out.join("\n");
+  }, 400);
+};
+</script>
+</body></html>

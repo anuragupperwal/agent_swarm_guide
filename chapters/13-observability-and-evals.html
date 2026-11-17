@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Observability and Evaluation · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar"><div class="topbar-inner">
+  <a class="brand" href="../index.html">Loop <span>→</span> Swarm</a>
+  <div class="crumbs"><a href="../index.html">Guide</a> · Part 3 · The harness · Chapter 13</div>
+  <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+</div></header>
+
+<div class="page has-toc">
+<main class="chapter">
+  <header class="ch-head">
+    <p class="eyebrow"><b>Part 3 · The harness</b> · Chapter 13 · Level L3</p>
+    <h1>Observability and evaluation</h1>
+    <p class="lede">An agent run doesn't repeat itself: the same input can take a different path next time. So you need two things. A trace that lets you reconstruct exactly what happened in one run, and an evaluation that tells you what happens across many. This chapter builds both, from the record format up.</p>
+    <ul class="ch-meta">
+      <li><b>55 min</b> reading</li>
+      <li>Builds on: <b>ch01 non-determinism, ch03 trajectories, ch11 failures</b></li>
+      <li>Your project: <b>Stage 1, Stage 5, Stage 6</b></li>
+    </ul>
+    <ol class="where" aria-label="Where this chapter sits in the guide">
+      <li class="past"><span>Part 1</span>Foundations</li>
+      <li class="past"><span>Part 2</span>Thinking &amp; memory</li>
+      <li class="here"><span>Part 3</span>The harness</li>
+      <li><span>Part 4</span>Multi-agent</li>
+      <li><span>Part 5</span>Together</li>
+    </ol>
+  </header>
+
+  <details class="toc-mobile"><summary>In this chapter</summary><div data-toc></div></details>
+
+  <div class="box predict">
+    <span class="box-label">Predict first · 10 min</span>
+    <p>Write answers in <code>docs/LEARNING_NOTES.md</code> under “Guide ch13”. Tag each one <em>sure</em> or <em>guess</em>. Don't read on until you're done.</p>
+    <ol>
+      <li>A swarm run with 12 agents produced a wrong final answer. All you have is <code>print</code> output from each agent, interleaved. Name three questions you'd want answered, and say whether you could answer them from those prints.</li>
+      <li>An agent solves a task 80% of the time. You run it 5 times. What's the chance that <em>at least one</em> run succeeds? What's the chance that <em>all five</em> succeed? Write two numbers.</li>
+      <li>You ask the same model to grade its own answers against a rubric. Name one way the grade could be biased.</li>
+    </ol>
+  </div>
+
+  <h2 id="big-idea">The big idea</h2>
+  <p>With ordinary code, you debug by reproducing the bug: run it again with the same input and watch. With an agent, that doesn't work. The same input can lead to a different trajectory, and the failure you're chasing may not happen again for twenty runs. And with a swarm, twelve agents interleave their work, so even a perfect log of each one doesn't show you how they affected each other.</p>
+  <p>So the strategy changes in two ways:</p>
+  <div class="cols-2">
+    <div class="card"><p><strong>Observability</strong>: record enough during every run that you can reconstruct it afterwards, without running it again. The record is the reproduction.</p></div>
+    <div class="card"><p><strong>Evaluation</strong>: stop judging the system by single runs. Run each task many times and measure rates, spreads and costs.</p></div>
+  </div>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>A trace tells you what happened once. An eval tells you what happens in general.</strong> You need both, and they share one foundation: a structured event record written by the harness, not by the model. If the record is good, every metric, every debugging session and every eval in this chapter can be computed from it.</p>
+  </div>
+
+  <h2 id="signals" data-short="Logs, metrics, traces">Logs, metrics and traces</h2>
+  <p>These three are usually called the <em>pillars</em> of observability. They aren't three tools. They're three views of the same events, each answering a different question.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 236" role="img" aria-label="Three panels. Logs: a list of timestamped event lines, such as spawn child-2, model call 812 tokens, retry after 529. Metrics: a bar chart of tokens per run, where run 4 is much higher than the others. Traces: a tree of nested time bars showing one run's agents and calls. Logs answer what happened, metrics answer whether something is off, traces answer why and where.">
+        <text class="t-b" x="20" y="26">Logs</text>
+        <rect class="n-sunken" x="20" y="36" width="220" height="150" rx="6"/>
+        <text class="t-mono" x="32" y="62">12:00:01 spawn child-2</text>
+        <text class="t-mono" x="32" y="84">12:00:03 model 812 tok</text>
+        <text class="t-mono" x="32" y="106">12:00:04 tool search ok</text>
+        <text class="t-mono t-red" x="32" y="128">12:00:09 retry 529</text>
+        <text class="t-mono" x="32" y="150">12:00:12 child-2 done</text>
+        <text class="t-mono t-muted" x="32" y="172">…</text>
+
+        <text class="t-b" x="250" y="26">Metrics</text>
+        <rect class="n-sunken" x="250" y="36" width="220" height="150" rx="6"/>
+        <text class="t-xs t-muted" x="262" y="54">tokens per run</text>
+        <rect class="fill-accent" x="266" y="130" width="18" height="40"/>
+        <rect class="fill-accent" x="294" y="124" width="18" height="46"/>
+        <rect class="fill-accent" x="322" y="132" width="18" height="38"/>
+        <rect class="fill-red" x="350" y="80" width="18" height="90"/>
+        <rect class="fill-accent" x="378" y="126" width="18" height="44"/>
+        <rect class="fill-accent" x="406" y="128" width="18" height="42"/>
+        <rect class="fill-accent" x="434" y="122" width="18" height="48"/>
+        <line class="e-muted" x1="260" y1="170" x2="460" y2="170"/>
+        <text class="t-xs t-red" x="359" y="74" text-anchor="middle">run 4?</text>
+
+        <text class="t-b" x="480" y="26">Traces</text>
+        <rect class="n-sunken" x="480" y="36" width="220" height="150" rx="6"/>
+        <rect class="n-accent" x="490" y="52" width="200" height="12" rx="2"/>
+        <rect class="n-accent" x="502" y="72" width="90" height="12" rx="2"/>
+        <rect class="n-accent" x="502" y="92" width="150" height="12" rx="2"/>
+        <rect class="n-violet" x="514" y="112" width="50" height="12" rx="2"/>
+        <rect class="n-red" x="566" y="112" width="30" height="12" rx="2"/>
+        <rect class="n-violet" x="598" y="112" width="54" height="12" rx="2"/>
+        <rect class="n-accent" x="502" y="132" width="60" height="12" rx="2"/>
+        <rect class="n-violet" x="654" y="152" width="36" height="12" rx="2"/>
+
+        <text class="t-sm" x="130" y="206" text-anchor="middle">events, in order</text>
+        <text class="t-sm" x="360" y="206" text-anchor="middle">numbers, aggregated over runs</text>
+        <text class="t-sm" x="590" y="206" text-anchor="middle">one run's causal tree, timed</text>
+        <text class="t-xs t-muted" x="130" y="224" text-anchor="middle">answers: what happened?</text>
+        <text class="t-xs t-muted" x="360" y="224" text-anchor="middle">answers: is something off?</text>
+        <text class="t-xs t-muted" x="590" y="224" text-anchor="middle">answers: why, and where?</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 13.1</b>Three views of the same events. A metric notices that run 4 used twice the tokens. The trace of run 4 shows which agent spent them and what it was waiting on. The logs give the detail of each step. You'll use them in exactly that order.</figcaption>
+  </figure>
+
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th></th><th>Logs</th><th>Metrics</th><th>Traces</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Shape</strong></td><td>One record per event</td><td>Counters, gauges, histograms</td><td>A tree of spans per run</td></tr>
+        <tr><td><strong>Agent examples</strong></td><td>“child-2 called <code>search</code>”, “validation failed: field <code>subtasks</code>”</td><td>Tokens per run, p95 model latency, retry rate, failure rate by kind</td><td>Root → children → model and tool calls, with timing and parent links</td></tr>
+        <tr><td><strong>Good for</strong></td><td>Detail of one step</td><td>Trends, alerts, comparisons across runs</td><td>Causality and latency inside one run</td></tr>
+        <tr><td><strong>Weak at</strong></td><td>Showing structure. Interleaved lines from 12 agents are hard to read.</td><td>Explaining a single case</td><td>Aggregates, unless you compute them from many traces</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>That's predict question 1. Interleaved <code>print</code> output tells you <em>what</em> each agent said, but not <em>which</em> agent caused which, how long each step waited, or where the tokens went. You can't recover structure that was never recorded.</p>
+
+  <h2 id="spans" data-short="The span model">Traces and the span model</h2>
+  <p>A <strong>trace</strong> is the record of one run. It's built from <strong>spans</strong>. A span is one unit of work with a start and an end: an agent's whole lifetime, one model call, one tool call. Every span has:</p>
+  <dl class="defs">
+    <dt>Identity</dt><dd>A trace id (shared by every span in the run) and a span id (unique to this span).</dd>
+    <dt>A parent</dt><dd>The span id of the span that caused this one. The root span has none. These parent links turn a flat list of spans into a tree.</dd>
+    <dt>Timing</dt><dd>Start and end timestamps. The duration is what the waterfall in Figure 13.2 draws.</dd>
+    <dt>Attributes</dt><dd>Key-value facts: model name, token counts, tool name, stop reason.</dd>
+    <dt>Status and events</dt><dd>Whether it succeeded, plus point-in-time events inside it, such as “retry 2 after 529”.</dd>
+  </dl>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 332" role="img" aria-label="A span waterfall for one run over 40 seconds. The root agent spans 0 to 40 seconds. It makes a planning model call from 0 to 5 seconds, then three children start at 5 seconds and run concurrently. Child A runs 5 to 20 seconds with a model call, a search tool call and another model call. Child B runs 5 to 31 seconds: a model call, then a backoff after a 529 error from 12 to 17 seconds, then a long model call to 31 seconds. Child C runs 5 to 13 seconds. The root's synthesis call runs from 31 to 40 seconds. Child B is the critical path.">
+        <text class="t-sm" x="20" y="54">root agent</text>
+        <rect class="n-accent" x="200" y="41" width="480" height="16" rx="3"/>
+        <text class="t-sm" x="32" y="74">model: plan</text>
+        <rect class="n-violet" x="200" y="61" width="60" height="16" rx="3"/>
+
+        <text class="t-sm t-b" x="32" y="94">child A</text>
+        <rect class="n-accent" x="260" y="81" width="180" height="16" rx="3"/>
+        <text class="t-xs" x="44" y="114">model</text>
+        <rect class="n-violet" x="260" y="101" width="72" height="16" rx="3"/>
+        <text class="t-xs" x="44" y="134">tool: search</text>
+        <rect class="n-amber" x="332" y="121" width="36" height="16" rx="3"/>
+        <text class="t-xs" x="44" y="154">model</text>
+        <rect class="n-violet" x="368" y="141" width="72" height="16" rx="3"/>
+
+        <text class="t-sm t-b" x="32" y="174">child B</text>
+        <rect class="n-accent n-thick" x="260" y="161" width="312" height="16" rx="3"/>
+        <text class="t-xs t-red t-b" x="580" y="174">← critical path</text>
+        <text class="t-xs" x="44" y="194">model</text>
+        <rect class="n-violet" x="260" y="181" width="84" height="16" rx="3"/>
+        <text class="t-xs t-red" x="44" y="214">backoff after 529</text>
+        <rect class="n-red" x="344" y="201" width="60" height="16" rx="3"/>
+        <text class="t-xs" x="44" y="234">model</text>
+        <rect class="n-violet" x="404" y="221" width="168" height="16" rx="3"/>
+
+        <text class="t-sm t-b" x="32" y="254">child C</text>
+        <rect class="n-accent" x="260" y="241" width="96" height="16" rx="3"/>
+        <text class="t-xs" x="44" y="274">model</text>
+        <rect class="n-violet" x="260" y="261" width="96" height="16" rx="3"/>
+
+        <text class="t-sm" x="32" y="294">model: synthesize</text>
+        <rect class="n-violet" x="572" y="281" width="108" height="16" rx="3"/>
+
+        <line class="e-muted e-dash" x1="260" y1="36" x2="260" y2="300"/>
+        <text class="t-xs t-muted" x="264" y="34">children start together</text>
+
+        <line class="e-muted" x1="200" y1="308" x2="680" y2="308"/>
+        <text class="t-xs t-muted" x="200" y="324" text-anchor="middle">0 s</text>
+        <text class="t-xs t-muted" x="320" y="324" text-anchor="middle">10 s</text>
+        <text class="t-xs t-muted" x="440" y="324" text-anchor="middle">20 s</text>
+        <text class="t-xs t-muted" x="560" y="324" text-anchor="middle">30 s</text>
+        <text class="t-xs t-muted" x="680" y="324" text-anchor="middle">40 s</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 13.2</b>A span waterfall: the root and three concurrent children, to scale. The indentation on the left is the parent link. Two facts jump out that no log would show. The run took 40 seconds because of child B alone, which makes B the <em>critical path</em>. And 5 of B's 26 seconds were spent waiting out a backoff, not working.</figcaption>
+  </figure>
+
+  <p>Reading a waterfall is a skill worth practicing. Start with the root's duration. Find the child whose end lines up with the next thing the root does: that's the critical path. Then look inside it for gaps, retries and long single calls. Shortening any span that isn't on the critical path doesn't make the run faster. Here, speeding up child C would save nothing.</p>
+
+  <h2 id="spawn-tree" data-short="Tracing a spawn tree">Tracing a spawn tree</h2>
+  <p>In a swarm harness, the span tree and the spawn tree are the same tree. Every agent is a span. Its parent span is the agent that spawned it. Its model and tool calls are child spans inside it. If each record carries the right ids, the whole run can be rebuilt from a flat file of events.</p>
+  <p>Your Stage 1 plan already names six fields for each JSONL event. Here's how they line up with the span model, and what each one makes possible:</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Your field</th><th>Span-model equivalent</th><th>What it lets you compute</th></tr></thead>
+      <tbody>
+        <tr><td><code>run_id</code></td><td>trace id</td><td>Everything from one run, and comparisons between runs</td></tr>
+        <tr><td><code>agent_id</code></td><td>span id of the agent's span</td><td>Who did this</td></tr>
+        <tr><td><code>parent_id</code></td><td>parent span id</td><td>The tree: depth, fan-out, which branch spent what</td></tr>
+        <tr><td><code>event</code></td><td>span name, or an event inside a span</td><td>Filtering and counting: retries, failures, spawns</td></tr>
+        <tr><td><code>ts</code></td><td>start and end times</td><td>Ordering and durations, but only if you can pair a start with its end</td></tr>
+        <tr><td><code>tokens</code></td><td>usage attributes</td><td>Cost and budget checks, per agent and per branch</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Look at the last two rows closely. A single <code>ts</code> per event gives you ordering, but a duration needs <em>two</em> timestamps that you can match up, so a model call needs either start and end events with a shared call id, or one event that records both times. And a single <code>tokens</code> number hides the split between input and output tokens, which are priced differently and grow differently (ch01). Neither is wrong for Stage 1, but you should decide it on purpose.</p>
+  <p>The other practical problem is <strong>propagation</strong>: how does code deep inside a child know its own <code>agent_id</code> and its parent's, without passing them through every function? In Python's asyncio, a new task gets a <em>copy</em> of the current <code>contextvars</code> context when it's created. A context variable set just before spawning a child task is therefore visible inside that task, and changing it inside the child doesn't affect the parent. That's the same mechanism tracing libraries use.</p>
+
+  <h2 id="otel-genai" data-short="OpenTelemetry GenAI">The OpenTelemetry GenAI conventions</h2>
+  <p><strong>OpenTelemetry</strong> (OTel) is the vendor-neutral open standard for traces, metrics and logs. Its <strong>semantic conventions</strong> define standard names for attributes, so that any OTel-compatible tool can display your data without custom parsing. There's a set of conventions specifically for generative AI. It covers spans for model calls, with attributes such as <code>gen_ai.request.model</code>, <code>gen_ai.usage.input_tokens</code>, <code>gen_ai.usage.output_tokens</code> and <code>gen_ai.response.finish_reasons</code>, and has been extended to agent operations such as invoking an agent and executing a tool, named by a <code>gen_ai.operation.name</code> attribute.</p>
+  <div class="box note">
+    <span class="box-label">Note</span>
+    <p>The GenAI conventions were still marked as in development when this guide was written, and some attribute names have already changed between versions. Treat the names above as examples of the <em>shape</em>, and check the current specification before you depend on any of them.</p>
+  </div>
+  <p>For your project, the sensible order is: write your own JSONL format first, because you'll learn more by deciding each field yourself. If the fields map cleanly onto spans, exporting to OTel later is a translation step, not a redesign. If they don't map cleanly, that's a sign the record is missing structure, usually a parent link or a paired start and end.</p>
+
+  <h2 id="what-to-record" data-short="What to record">What to record</h2>
+  <p>The test for a good record is simple: <strong>could someone who wasn't there explain this run from the record alone?</strong> That needs these events at minimum:</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Event</th><th>Worth recording</th><th>Answers</th></tr></thead>
+      <tbody>
+        <tr><td>Run start and end</td><td>Task, config, limits; final status and totals</td><td>What was asked, under what rules, and how it ended</td></tr>
+        <tr><td>Agent start and end</td><td>Task text, depth, budget granted; status, error kind, usage</td><td>Who did what, and how it went</td></tr>
+        <tr><td>Model call</td><td>Model, input and output tokens, latency, <code>stop_reason</code>, attempt number</td><td>Where time and money went</td></tr>
+        <tr><td>Tool call</td><td>Tool name, arguments (redacted), duration, <code>is_error</code></td><td>What the agent actually did in the world</td></tr>
+        <tr><td>Spawn proposed, granted or rejected</td><td>Requested vs granted capabilities, and the reason for any rejection</td><td>How the tree got its shape (ch11, ch12)</td></tr>
+        <tr><td>Control events</td><td>Validation failed, retry, limit hit, breaker opened</td><td>Where the harness stepped in</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Full prompts and responses are the most useful data for debugging and the worst to put in every event line: they're large, and they contain whatever sensitive data the agent read. A common pattern is to store them in a separate content store, keyed by a hash, and put only the hash in the event. You need the full content anyway for replay (ch09) and for the trajectory evaluations later in this chapter. Scrub secrets before writing either one (ch12).</p>
+
+  <div class="box pitfall">
+    <span class="box-label">Common pitfall</span>
+    <p><strong>Recording what the model says instead of what happened.</strong> “I've used about 3,000 tokens and searched twice” is model output, and it can be wrong. Token counts come from the API's <code>usage</code> field. Tool calls are recorded by the executor that ran them. Status comes from your harness. The record is ground truth only if the harness writes it.</p>
+  </div>
+
+  <p>Metrics then come almost for free, as aggregations over the event records: tokens and cost per run, per agent and per depth; p50 and p95 latency for each kind of call; retry rate; failure rate by error kind; agents per run; how often each limit fires. When a metric looks wrong, the <code>run_id</code> takes you straight to the trace.</p>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Stage 1.</strong> From your six fields alone, can you compute (a) the tree, (b) each agent's duration, (c) the critical path, and (d) the cost of each branch? For each one you can't, name the field that's missing.</li>
+      <li><strong>Stage 3.</strong> Many tasks will write to one JSONL file. In a single event loop, can two lines get mixed together? Reason it through from ch10: where are the <code>await</code> points in your write?</li>
+      <li><strong>Stage 6.</strong> Your plan includes a cost report. Make it a pure function of the trace file, with no other input. What does that requirement force you to record?</li>
+    </ul>
+  </div>
+
+  <h2 id="eval-levels" data-short="What to evaluate">Outcome, trajectory and component evals</h2>
+  <p>Now the second half: evaluation. The first question is <em>what</em> you grade, because one run offers three different things to grade.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 250" role="img" aria-label="One run drawn as a sequence: task, plan call, spawn 3 children, search four times, results back, final answer. A component eval grades a single step, the plan call. A trajectory eval grades the whole path from plan to results: right tools, wasted steps, loops, cost. An outcome eval grades only the final answer.">
+        <defs>
+          <marker id="f1303-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-sm t-muted" x="20" y="24">Three things you can grade in one run</text>
+        <rect class="n-plain" x="20" y="110" width="80" height="40" rx="6"/>
+        <text class="t-sm" x="60" y="134" text-anchor="middle">task</text>
+        <line x1="100" y1="130" x2="118" y2="130" marker-end="url(#f1303-ah)"/>
+        <rect class="n-violet" x="120" y="110" width="90" height="40" rx="6"/>
+        <text class="t-sm" x="165" y="134" text-anchor="middle">plan call</text>
+        <line x1="210" y1="130" x2="228" y2="130" marker-end="url(#f1303-ah)"/>
+        <rect class="n-accent" x="230" y="110" width="90" height="40" rx="6"/>
+        <text class="t-sm" x="275" y="134" text-anchor="middle">spawn 3</text>
+        <line x1="320" y1="130" x2="338" y2="130" marker-end="url(#f1303-ah)"/>
+        <rect class="n-amber" x="340" y="110" width="90" height="40" rx="6"/>
+        <text class="t-sm" x="385" y="134" text-anchor="middle">search ×4</text>
+        <line x1="430" y1="130" x2="448" y2="130" marker-end="url(#f1303-ah)"/>
+        <rect class="n-accent" x="450" y="110" width="90" height="40" rx="6"/>
+        <text class="t-sm" x="495" y="134" text-anchor="middle">results back</text>
+        <line x1="540" y1="130" x2="598" y2="130" marker-end="url(#f1303-ah)"/>
+        <rect class="n-plain n-thick" x="600" y="110" width="100" height="40" rx="6"/>
+        <text class="t-sm t-b" x="650" y="134" text-anchor="middle">final answer</text>
+
+        <path class="e-violet" d="M120,98 V90 H210 V98"/>
+        <text class="t-sm t-violet t-b" x="165" y="80" text-anchor="middle">component</text>
+        <text class="t-xs" x="165" y="64" text-anchor="middle">one call: was this plan valid?</text>
+
+        <path class="e-accent" d="M600,98 V90 H700 V98"/>
+        <text class="t-sm t-accent t-b" x="650" y="80" text-anchor="middle">outcome</text>
+        <text class="t-xs" x="650" y="64" text-anchor="middle">is the answer right?</text>
+
+        <path class="e-amber" d="M120,162 V170 H540 V162"/>
+        <text class="t-sm t-amber t-b" x="330" y="188" text-anchor="middle">trajectory</text>
+        <text class="t-xs" x="330" y="204" text-anchor="middle">the path: right tools? wasted steps? loops? cost?</text>
+
+        <text class="t-sm t-muted" x="20" y="238">Outcome tells you whether it worked. Trajectory tells you how. Component tells you which part broke.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 13.3</b>Three levels of evaluation on one run. They relate to each other like end-to-end, integration and unit tests. Outcome evals matter most to users. Component evals are the cheapest to run and the most precise about where a problem is.</figcaption>
+  </figure>
+
+  <div class="cols-3">
+    <div class="card">
+      <p><strong>Outcome</strong></p>
+      <p>Compare the final result with a reference answer or a rubric. This is the level users care about. Its weakness: it can't tell you <em>why</em> a run failed, and it passes a run that got the right answer by a lucky or wasteful path.</p>
+    </div>
+    <div class="card">
+      <p><strong>Trajectory</strong></p>
+      <p>Grade the path, using the trace. You can match it exactly against a reference path, which is brittle because there are usually many valid paths, or you can check properties: no forbidden tools, at most N steps, validation before every write, no repeated calls.</p>
+    </div>
+    <div class="card">
+      <p><strong>Component</strong></p>
+      <p>Test one step in isolation with a fixed input. Given this task, does the planner produce a valid plan? Does the router choose the right branch? Fast and cheap, and good for catching regressions. Real traces are the best source of inputs.</p>
+    </div>
+  </div>
+
+  <h2 id="graders">Graders: code, model, human</h2>
+  <p>Once you know what to grade, you need something to do the grading. There are three kinds of grader, and a good eval suite uses all three, each where it's strongest.</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Grader</th><th>How it works</th><th>Strengths</th><th>Weaknesses</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Code</strong></td><td>Exact match, unit tests, schema checks, regex, numeric tolerance, trace queries</td><td>Fast, cheap, deterministic, unbiased</td><td>Only works when “correct” can be written down precisely</td></tr>
+        <tr><td><strong>LLM as judge</strong></td><td>A model scores an output against a rubric, or compares two outputs</td><td>Handles open-ended output, and scales</td><td>Biased, non-deterministic, and must be checked against human judgment</td></tr>
+        <tr><td><strong>Human</strong></td><td>People label outputs or compare pairs</td><td>The best judge of subjective quality, and the definition of ground truth</td><td>Slow, expensive, and people disagree with each other too</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Use code wherever you can. A surprising amount of agent behavior can be checked by code: did the tests pass, does the file exist, is the JSON valid, did the trace contain a forbidden call. Use a model as judge for the qualities code can't capture, such as whether the explanation is clear or the design is sound. Use humans to build the reference labels, and to check the model judge.</p>
+
+  <h3>The biases of a model judge</h3>
+  <p>Zheng and colleagues studied LLM judges in detail in 2023, in the paper that introduced MT-Bench and the Chatbot Arena. They found strong judges agreed with human preferences about as often as humans agreed with each other, and they also documented systematic biases:</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Bias</th><th>What happens</th><th>Mitigation</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Position</strong></td><td>In a pairwise comparison, the judge favors one position, often the first answer, regardless of content</td><td>Judge both orders. Count a win only if it holds in both.</td></tr>
+        <tr><td><strong>Verbosity</strong></td><td>Longer answers score higher, even when they add nothing</td><td>A rubric that rewards concision. Compare answers of similar length.</td></tr>
+        <tr><td><strong>Self-preference</strong></td><td>A judge favors outputs written by itself or by similar models</td><td>Use a judge from a different model family. This is predict question 3.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Two more practices make a model judge much more reliable. First, prefer several <strong>pass or fail checks</strong>, one per criterion (“cites at least two sources”, “states the trade-off”), over a single score from 1 to 10. Scores in the middle of a scale drift from run to run. Second, <strong>calibrate</strong> before trusting it: grade 30 to 50 outputs yourself, run the judge on the same outputs, and measure how often you agree. If agreement is poor, fix the rubric before you trust a single number from it.</p>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>A grader is a model of your judgment, and it needs testing like any other model.</strong> An eval built on an unvalidated judge measures the judge's preferences, not your system's quality.</p>
+  </div>
+
+  <h2 id="pass-k" data-short="pass@k vs pass^k">pass@k vs pass^k</h2>
+  <p>Because runs vary, “does it pass?” has no single answer. Two metrics turn the variation into numbers, and they answer opposite questions. Take an agent that succeeds on a task with probability p = 0.8 per attempt, and assume attempts are independent.</p>
+  <div class="cols-2">
+    <div class="card">
+      <p><strong>pass@k</strong>: at least one of k attempts succeeds.</p>
+      <div class="formula">pass@k = 1 − (1 − p)<sup>k</sup></div>
+      <p>pass@5 = 1 − 0.2<sup>5</sup> = <strong>0.99968</strong></p>
+    </div>
+    <div class="card">
+      <p><strong>pass^k</strong>: all k attempts succeed.</p>
+      <div class="formula">pass^k = p<sup>k</sup></div>
+      <p>pass^5 = 0.8<sup>5</sup> = <strong>0.32768</strong></p>
+    </div>
+  </div>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 290" role="img" aria-label="Line chart for an agent with 0.8 success per attempt, k from 1 to 8. pass@k rises quickly from 0.8 to almost 1.0 by k equals 3. pass^k falls steadily from 0.8 to 0.17 at k equals 8. At k equals 5, pass@k is 0.9997 and pass^k is 0.328.">
+        <text class="t-sm t-muted" x="20" y="22">one agent, success per attempt p = 0.8</text>
+        <line class="e-line" x1="80" y1="40" x2="640" y2="40"/>
+        <line class="e-line" x1="80" y1="90" x2="640" y2="90"/>
+        <line class="e-line" x1="80" y1="140" x2="640" y2="140"/>
+        <line class="e-line" x1="80" y1="190" x2="640" y2="190"/>
+        <line class="e-muted" x1="80" y1="240" x2="640" y2="240"/>
+        <text class="t-xs t-muted" x="70" y="44" text-anchor="end">1.0</text>
+        <text class="t-xs t-muted" x="70" y="94" text-anchor="end">0.75</text>
+        <text class="t-xs t-muted" x="70" y="144" text-anchor="end">0.5</text>
+        <text class="t-xs t-muted" x="70" y="194" text-anchor="end">0.25</text>
+        <text class="t-xs t-muted" x="70" y="244" text-anchor="end">0</text>
+
+        <line class="e-muted e-dash" x1="400" y1="40" x2="400" y2="240"/>
+
+        <polyline class="e-accent e-thick" points="80,80 160,48 240,41.6 320,40.3 400,40.1 480,40 560,40 640,40"/>
+        <circle class="fill-accent" cx="80" cy="80" r="3.5"/><circle class="fill-accent" cx="160" cy="48" r="3.5"/><circle class="fill-accent" cx="240" cy="41.6" r="3.5"/><circle class="fill-accent" cx="320" cy="40.3" r="3.5"/><circle class="fill-accent" cx="400" cy="40.1" r="3.5"/><circle class="fill-accent" cx="480" cy="40" r="3.5"/><circle class="fill-accent" cx="560" cy="40" r="3.5"/><circle class="fill-accent" cx="640" cy="40" r="3.5"/>
+
+        <polyline class="e-violet e-thick" points="80,80 160,112 240,137.6 320,158.1 400,174.5 480,187.6 560,198.1 640,206.4"/>
+        <circle class="fill-violet" cx="80" cy="80" r="3.5"/><circle class="fill-violet" cx="160" cy="112" r="3.5"/><circle class="fill-violet" cx="240" cy="137.6" r="3.5"/><circle class="fill-violet" cx="320" cy="158.1" r="3.5"/><circle class="fill-violet" cx="400" cy="174.5" r="3.5"/><circle class="fill-violet" cx="480" cy="187.6" r="3.5"/><circle class="fill-violet" cx="560" cy="198.1" r="3.5"/><circle class="fill-violet" cx="640" cy="206.4" r="3.5"/>
+
+        <text class="t-sm t-accent t-b" x="650" y="44">pass@k</text>
+        <text class="t-sm t-violet t-b" x="650" y="210">pass^k</text>
+        <text class="t-xs t-accent" x="408" y="60">pass@5 = 0.9997</text>
+        <text class="t-xs t-violet" x="392" y="196" text-anchor="end">pass^5 = 0.328</text>
+
+        <text class="t-xs t-muted" x="80" y="258" text-anchor="middle">1</text>
+        <text class="t-xs t-muted" x="160" y="258" text-anchor="middle">2</text>
+        <text class="t-xs t-muted" x="240" y="258" text-anchor="middle">3</text>
+        <text class="t-xs t-muted" x="320" y="258" text-anchor="middle">4</text>
+        <text class="t-xs t-muted" x="400" y="258" text-anchor="middle">5</text>
+        <text class="t-xs t-muted" x="480" y="258" text-anchor="middle">6</text>
+        <text class="t-xs t-muted" x="560" y="258" text-anchor="middle">7</text>
+        <text class="t-xs t-muted" x="640" y="258" text-anchor="middle">8</text>
+        <text class="t-sm t-muted" x="360" y="280" text-anchor="middle">k, the number of attempts</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 13.4</b>The same agent, two very different numbers. Both curves are computed exactly from p = 0.8. This answers predict question 2: at k = 5 one metric says “almost always works” and the other says “fails two times in three”.</figcaption>
+  </figure>
+
+  <p>Which one is honest depends on how the system will be used:</p>
+  <ul>
+    <li><strong>pass@k fits when you can check answers cheaply.</strong> If a test suite tells you which of five generated patches works, you only need one. pass@k comes from code-generation research, where the Codex paper (Chen and colleagues, 2021) gave the standard way to estimate it.</li>
+    <li><strong>pass^k fits when every run has to work.</strong> A deployed agent serves each user once, with no verifier. If a thousand users run it, you care about the chance it works <em>every</em> time, which is a measure of consistency. τ-bench (Yao and colleagues, 2024) introduced pass^k for exactly this reason, and showed agents whose pass^k dropped steeply as k grew.</li>
+  </ul>
+  <p>Reporting pass@k for a system that runs once per user, without saying so, overstates its reliability. That's a red flag in a paper and in an interview answer.</p>
+
+  <h2 id="run-n" data-short="Run it N times">Run every eval N times</h2>
+  <p>Sampling, changing tool results, the order in which concurrent children finish, and changes on the provider's side all make runs differ. You can't switch the variation off, so the only option is to measure it. One run is an anecdote. The question is how many runs make a measurement.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 206" role="img" aria-label="Approximate 95 percent intervals for an observed pass rate of 0.70. With 10 runs, the interval is plus or minus 0.28, from about 0.42 to 0.98. With 30 runs, plus or minus 0.16. With 100 runs, plus or minus 0.09, from about 0.61 to 0.79.">
+        <text class="t-xs t-caps t-muted" x="20" y="22">runs</text>
+        <text class="t-xs t-caps t-muted" x="80" y="22">interval</text>
+        <text class="t-xs t-muted" x="512" y="22" text-anchor="middle">observed 0.70</text>
+        <line class="e-muted e-dash" x1="512" y1="28" x2="512" y2="150"/>
+
+        <text class="t-sm t-b" x="20" y="54">n = 10</text>
+        <text class="t-sm" x="80" y="54">± 0.28</text>
+        <rect class="n-amber" x="353" y="43" width="318" height="14" rx="3"/>
+        <circle class="fill-fg" cx="512" cy="50" r="4"/>
+
+        <text class="t-sm t-b" x="20" y="94">n = 30</text>
+        <text class="t-sm" x="80" y="94">± 0.16</text>
+        <rect class="n-violet" x="420" y="83" width="184" height="14" rx="3"/>
+        <circle class="fill-fg" cx="512" cy="90" r="4"/>
+
+        <text class="t-sm t-b" x="20" y="134">n = 100</text>
+        <text class="t-sm" x="80" y="134">± 0.09</text>
+        <rect class="n-accent" x="462" y="123" width="100" height="14" rx="3"/>
+        <circle class="fill-fg" cx="512" cy="130" r="4"/>
+
+        <line class="e-muted" x1="120" y1="160" x2="680" y2="160"/>
+        <text class="t-xs t-muted" x="120" y="176" text-anchor="middle">0</text>
+        <text class="t-xs t-muted" x="260" y="176" text-anchor="middle">0.25</text>
+        <text class="t-xs t-muted" x="400" y="176" text-anchor="middle">0.5</text>
+        <text class="t-xs t-muted" x="540" y="176" text-anchor="middle">0.75</text>
+        <text class="t-xs t-muted" x="680" y="176" text-anchor="middle">1.0</text>
+        <text class="t-xs t-muted" x="20" y="198">Normal approximation, 95%: ± 1.96 × √(p(1 − p) / n). For small n a Wilson interval is more accurate; the lesson is the same.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 13.5</b>How sure a measured 0.70 is, to scale. With 10 runs, the true rate could plausibly be anywhere from about 0.42 to 0.98. A rival system that scores 0.60 on 10 runs might be better, worse or the same. Notice that tripling the runs from 10 to 30 shrinks the interval by only √3, about 1.7 times.</figcaption>
+  </figure>
+
+  <p>Some practical rules follow from Figure 13.5:</p>
+  <ul>
+    <li><strong>Report a rate with its interval</strong>, plus the mean and spread of cost and latency. Never a single run.</li>
+    <li><strong>Compare systems on the same tasks.</strong> Running A and B on the same task set and comparing task by task (a <em>paired</em> comparison) detects smaller differences than comparing two overall averages.</li>
+    <li><strong>Version everything in the record.</strong> Model id, prompts, tool definitions and harness version go into the run-start event. Otherwise “B is better than A” may really mean “the provider updated something between Monday and Tuesday”.</li>
+    <li><strong>Budget for it.</strong> N runs of a swarm cost N times a swarm. That's a real reason to keep component evals cheap and run the expensive outcome evals less often.</li>
+  </ul>
+
+  <h2 id="benchmarks">Benchmarks and their caveats</h2>
+  <p>Public benchmarks let you compare against other people's numbers. You'll meet these in papers and interviews, so know what each one actually measures.</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Benchmark</th><th>What it tests</th><th>How it's graded</th><th>Watch out for</th></tr></thead>
+      <tbody>
+        <tr><td><strong>SWE-bench</strong><br><span class="small muted">Jimenez et al., 2023</span></td><td>Resolving real GitHub issues in popular Python repositories</td><td>Code: the repository's own tests must pass after the patch</td><td>Test quality varies, which led to a human-checked subset, SWE-bench Verified (2024). The repositories are public, so training data may contain the fixes.</td></tr>
+        <tr><td><strong>GAIA</strong><br><span class="small muted">Mialon et al., 2023</span></td><td>General-assistant questions that need browsing, tools and several reasoning steps, in three difficulty levels</td><td>Code: exact match against a short, unambiguous answer</td><td>Answers can leak online over time. Only the final answer is graded, not the path.</td></tr>
+        <tr><td><strong>τ-bench</strong><br><span class="small muted">Yao et al., 2024</span></td><td>An agent with tools talks to a simulated user in retail and airline settings, under written policies</td><td>Code: the final database state is compared with the expected one</td><td>The user is simulated by a model, which adds its own variation. Source of pass^k.</td></tr>
+        <tr><td><strong>WebArena</strong><br><span class="small muted">Zhou et al., 2023</span></td><td>Tasks on realistic, self-hosted websites (shopping, forums, code hosting)</td><td>Code: functional checks on the resulting state</td><td>Heavy environment setup. Results depend on how the agent sees the page.</td></tr>
+        <tr><td><strong>AgentDojo</strong><br><span class="small muted">Debenedetti et al., 2024</span></td><td>Task success and resistance to prompt injection, together</td><td>Code: task checks and attack checks</td><td>Covered in ch12. Measures a defense's cost in utility as well as its security.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Caveats that apply to all of them:</p>
+  <ul>
+    <li><strong>The harness counts as much as the model.</strong> The same model in two different harnesses can score very differently. A benchmark number describes a model <em>plus</em> its scaffolding, so check what scaffolding was used.</li>
+    <li><strong>Contamination and saturation.</strong> Public test sets leak into training data, and once top systems score near the maximum, a benchmark stops telling them apart.</li>
+    <li><strong>Cost is often missing.</strong> A higher score bought with ten times the tokens is a different result. Ask for cost per task alongside accuracy.</li>
+    <li><strong>Your task isn't the benchmark.</strong> Twenty to fifty tasks taken from your actual use, with clear pass criteria, tell you more about your system than any public leaderboard.</li>
+  </ul>
+
+  <h2 id="baseline" data-short="The single-agent baseline">The single-agent baseline</h2>
+  <p>This is the most important evaluation habit for anyone building multi-agent systems. <strong>Always compare the swarm with a single agent, and give the single agent the same budget.</strong></p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 270" role="img" aria-label="Hypothetical chart of task success against token budget. A single agent improves with budget: 0.48 at 1x, 0.56 at 2x, 0.62 at 4x and 0.65 at 8x. A swarm using 4x the budget scores 0.66. Compared with the single agent at 1x, the swarm looks 0.18 better. Compared with the single agent at the same 4x budget, it's only 0.04 better.">
+        <text class="t-xs t-muted" x="20" y="30">task success</text>
+        <line class="e-line" x1="120" y1="40" x2="600" y2="40"/>
+        <line class="e-line" x1="120" y1="85" x2="600" y2="85"/>
+        <line class="e-line" x1="120" y1="130" x2="600" y2="130"/>
+        <line class="e-line" x1="120" y1="175" x2="600" y2="175"/>
+        <line class="e-muted" x1="120" y1="220" x2="600" y2="220"/>
+        <text class="t-xs t-muted" x="110" y="44" text-anchor="end">0.8</text>
+        <text class="t-xs t-muted" x="110" y="89" text-anchor="end">0.7</text>
+        <text class="t-xs t-muted" x="110" y="134" text-anchor="end">0.6</text>
+        <text class="t-xs t-muted" x="110" y="179" text-anchor="end">0.5</text>
+        <text class="t-xs t-muted" x="110" y="224" text-anchor="end">0.4</text>
+
+        <polyline class="e-muted" points="140,184 280,148 420,121 560,107.5"/>
+        <circle class="n-plain" cx="140" cy="184" r="5"/>
+        <circle class="n-plain" cx="280" cy="148" r="5"/>
+        <circle class="n-plain" cx="420" cy="121" r="5"/>
+        <circle class="n-plain" cx="560" cy="107.5" r="5"/>
+        <circle class="fill-accent" cx="420" cy="103" r="6"/>
+
+        <line class="e-red e-dash" x1="146" y1="182" x2="413" y2="105"/>
+        <text class="t-xs t-red t-b" x="170" y="205">vs single agent at 1×: +0.18</text>
+        <path class="e-accent" d="M428,121 H436 V103 H428"/>
+        <text class="t-xs t-accent t-b" x="442" y="90">vs single agent at 4×: +0.04</text>
+
+        <circle class="n-plain" cx="146" cy="56" r="5"/>
+        <text class="t-xs" x="158" y="60">single agent, at different budgets</text>
+        <circle class="fill-accent" cx="146" cy="74" r="6"/>
+        <text class="t-xs" x="158" y="78">swarm, at 4× budget</text>
+
+        <text class="t-xs t-muted" x="140" y="238" text-anchor="middle">1×</text>
+        <text class="t-xs t-muted" x="280" y="238" text-anchor="middle">2×</text>
+        <text class="t-xs t-muted" x="420" y="238" text-anchor="middle">4×</text>
+        <text class="t-xs t-muted" x="560" y="238" text-anchor="middle">8×</text>
+        <text class="t-sm t-muted" x="360" y="260" text-anchor="middle">token budget per task, relative to one plain run</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 13.6</b>A hypothetical result, to show the comparison. The numbers are invented. Against a 1× single agent, the swarm looks like a large win. Against a single agent with the same 4× budget, the gain is small, and with 10 runs per arm it would sit well inside the noise of Figure 13.5.</figcaption>
+  </figure>
+
+  <p>The reason is that more tokens often help by themselves: more searching, more checking, longer reasoning. Anthropic reported, about its own multi-agent research system, that token usage alone explained most of the variance in performance on the BrowseComp benchmark. So a swarm that beats a cheap single agent may simply be buying the improvement. To claim the <em>architecture</em> helps, you have to beat the single agent at an equal budget. Chapter 14 looks at when that actually happens.</p>
+  <p>This is exactly what your Experiment 001 tests. Its value depends on decisions you make before the first run: what counts as success for an architecture design, how it's graded, how many runs each arm gets, and which budgets the single agent receives.</p>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Stage 5.</strong> Write the success criteria for Experiment 001 <em>before</em> you run it. A RAG architecture design is open-ended output. Which parts can a code grader check, and which need a rubric? Write the rubric as pass or fail checks.</li>
+      <li><strong>Stage 5.</strong> If you use a model judge, which model family will it come from, and how many outputs will you grade by hand to calibrate it?</li>
+      <li><strong>Stage 5.</strong> How many runs per arm can you afford? Using Figure 13.5, what's the smallest difference between arms that number of runs could detect?</li>
+      <li><strong>Stage 6.</strong> Your plan has an answer-quality eval. Will you report pass@k, pass^k, or both? Write the sentence justifying the choice in terms of how the harness will be used.</li>
+    </ul>
+  </div>
+
+  <div class="box pitfall">
+    <span class="box-label">Misconceptions to drop</span>
+    <ul>
+      <li>“It worked when I ran it.” One run is one sample from a distribution (Chapter 01). Report a rate, with the number of runs.</li>
+      <li>“pass@k is the success rate.” It's the chance that <em>at least one</em> of k tries succeeds. Users usually experience something closer to pass^k.</li>
+      <li>“An LLM judge is objective.” It has position, verbosity and self-preference biases. Validate it against human labels before you trust it.</li>
+      <li>“A high benchmark score means it'll do well on my task.” Benchmarks measure their own tasks, under their own harness, and they can leak into training data.</li>
+      <li>“Tracing is a production concern.” From Stage 1 on, your trace is your debugger.</li>
+    </ul>
+  </div>
+
+  <h2 id="check">Check yourself</h2>
+  <p>Answer each one out loud or on paper before you open it.</p>
+  <div class="quiz">
+    <details>
+      <summary><span class="tag recall">Recall</span> Logs, metrics, traces: what question does each answer best?</summary>
+      <div><p>Metrics answer “is something wrong, and is it getting worse?” They are cheap aggregates over many runs. Traces answer “where, and because of what?” They are the causal tree of one run. Logs answer “what exactly happened at this point?” They hold detail attached to one event. A good debugging session goes metric → trace → log.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag recall">Recall</span> What makes a set of spans into a tree, and how does a spawn tree map onto it?</summary>
+      <div><p>Every span has a span id, a trace id shared by the whole run, and a parent span id. Plus start and end times and attributes. The parent link makes the tree. In a swarm, each agent is a span whose parent is the agent that spawned it, and its model calls and tool calls are child spans inside it.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> Each run succeeds independently with p = 0.9. What are pass@3 and pass^3?</summary>
+      <div><p>pass@3 = 1 − 0.1³ = 0.999. pass^3 = 0.9³ = 0.729. The same agent “almost always works” if a user may retry until one attempt succeeds. It fails at least once in about a quarter of three-try sessions if every attempt must work.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> Your swarm passes 8 of 10 runs and your single agent passes 6 of 10. Can you say the swarm is better?</summary>
+      <div><p>No. With 10 runs each, the uncertainty ranges overlap heavily (Figure 13.5), so the difference is well within noise. Also check that both arms had the same token budget (Figure 13.6). Next steps: more runs, the same task set for both arms (a paired comparison), and success criteria fixed before running.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> You'll use an LLM judge for Experiment 001. Name three biases and one mitigation for each.</summary>
+      <div><p>Position bias: grade each pair in both orders and only accept consistent verdicts. Verbosity bias: grade against pass/fail rubric items, not overall quality, and keep length out of the rubric. Self-preference: use a judge from a different model family than the one being judged. Then calibrate: grade a sample by hand and measure how often the judge agrees with you.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> Write three trajectory checks for a spawning run that an outcome eval would miss.</summary>
+      <div><p>Examples: no spawn was attempted beyond the depth limit; no two siblings received near-duplicate subtasks; every child's result was actually used in the parent's aggregation; no agent made the same tool call with the same arguments three times in a row. Each one can be checked by a code grader over the trace, without reading the final answer.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “How would you show that your multi-agent system is actually better than a single agent?”</summary>
+      <div><p>Fix the task set and success criteria before running. Compare against a single agent given the <em>same</em> token budget, not a cheap one. Run each arm many times on the same tasks and report rates with uncertainty, plus cost and latency. Validate the grader against human labels. Then look at traces from wins and losses to explain <em>why</em>. If the gap disappears at equal budget, the architecture isn't what helped.</p></div>
+    </details>
+  </div>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><strong>Benjamin H. Sigelman et al., “Dapper, a Large-Scale Distributed Systems Tracing Infrastructure”</strong> (Google technical report, 2010).<span class="why">Where the trace and span model comes from. Short and readable.</span></li>
+    <li><strong>OpenTelemetry, semantic conventions for generative AI systems</strong> (OpenTelemetry project; still in development).<span class="why">Standard attribute names for model calls, tokens and agent spans. Check the current status before relying on specific names.</span></li>
+    <li><strong>Lianmin Zheng et al., “Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena”</strong> (NeurIPS Datasets and Benchmarks, 2023).<span class="why">Measures position, verbosity and self-enhancement bias in model judges.</span></li>
+    <li><strong>Mark Chen et al., “Evaluating Large Language Models Trained on Code”</strong> (2021).<span class="why">Introduces HumanEval and the unbiased pass@k estimator.</span></li>
+    <li><strong>Shunyu Yao et al., “τ-bench: A Benchmark for Tool-Agent-User Interaction in Real-World Domains”</strong> (2024).<span class="why">Defines pass^k and shows how quickly reliability drops with repeated trials.</span></li>
+    <li><strong>Carlos E. Jimenez et al., “SWE-bench: Can Language Models Resolve Real-World GitHub Issues?”</strong> (ICLR, 2024) and <strong>Grégoire Mialon et al., “GAIA: a benchmark for General AI Assistants”</strong> (2023).<span class="why">Two widely cited agent benchmarks. Read their task descriptions to see what a score does and doesn't measure.</span></li>
+    <li><strong>J. Hadfield et al., “How we built our multi-agent research system”</strong> (Anthropic, 2025).<span class="why">The token-usage finding behind Figure 13.6, and a practical section on evaluating agents.</span></li>
+  </ul>
+
+  <section class="recall-card" aria-labelledby="recall-13">
+    <h2 id="recall-13" data-short="Recall card">Recall card</h2>
+    <p class="muted small">Five lines to rehearse. If you can expand each into a minute of explanation, you know this chapter.</p>
+    <ol>
+      <li>Metrics say something is wrong, traces say where and why, logs give the detail. Go in that order.</li>
+      <li>A span is one timed unit of work with a parent link. A spawn tree is a trace.</li>
+      <li>Record facts from the harness (the API usage field, the tool executor), never the model's account of itself.</li>
+      <li>Evaluate outcome, trajectory and component. A grader is a model of your judgment and must be validated.</li>
+      <li>pass@k is optimistic, pass^k is reliability. Run N times, and compare against a single agent with the same budget.</li>
+    </ol>
+  </section>
+
+  <div class="done">
+    <input type="checkbox" id="done-toggle" data-chapter="13">
+    <label for="done-toggle">I can explain this chapter without notes<small>Saved in this browser only. It updates the count on the guide's home page.</small></label>
+  </div>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="12-security.html"><small>Previous · Chapter 12</small>Security and safety</a>
+    <a class="next" href="14-why-multi-agent.html"><small>Next · Chapter 14</small>Why multiple agents (and why not)</a>
+  </nav>
+</main>
+<aside class="toc-rail" aria-label="On this page"><p class="toc-title">In this chapter</p><nav data-toc></nav></aside>
+</div>
+</body>
+</html>

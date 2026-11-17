@@ -1,0 +1,53 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>body{margin:0}iframe{border:0;width:1280px;display:block}</style></head>
+<body>
+<pre id="out">pending</pre>
+<iframe id="f" height="20000"></iframe>
+<script>
+// svglint.html?page=<abs path>. Reports, per figure: text overlapping text, text spilling out of
+// the smallest rect that contains its centre, and text outside the svg's own box.
+var page = new URLSearchParams(location.search).get("page");
+var f = document.getElementById("f");
+f.src = "file://" + page;
+function inter(a, b) {
+  var w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+  var h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+  return [w, h];
+}
+f.onload = function () {
+  setTimeout(function () {
+    var d = f.contentDocument, out = [];
+    d.querySelectorAll("figure.fig").forEach(function (fig, fi) {
+      var cap = fig.querySelector("figcaption b");
+      var name = cap ? cap.textContent.trim() : "fig#" + (fi + 1);
+      var svg = fig.querySelector("svg");
+      if (!svg) return;
+      var sb = svg.getBoundingClientRect();
+      var texts = Array.prototype.filter.call(svg.querySelectorAll("text"), function (t) { return t.textContent.trim(); });
+      var tb = texts.map(function (t) { return t.getBoundingClientRect(); });
+      var rects = Array.prototype.map.call(svg.querySelectorAll("rect"), function (r) { return r.getBoundingClientRect(); });
+      texts.forEach(function (t, i) {
+        var b = tb[i], label = t.textContent.trim().slice(0, 34);
+        if (b.left < sb.left - 1 || b.right > sb.right + 1 || b.top < sb.top - 1 || b.bottom > sb.bottom + 1)
+          out.push(name + " | OUTSIDE svg | '" + label + "'");
+        var cx = (b.left + b.right) / 2, cy = (b.top + b.bottom) / 2, best = null, area = 1e12;
+        rects.forEach(function (r) {
+          if (cx > r.left && cx < r.right && cy > r.top && cy < r.bottom) {
+            var a = r.width * r.height;
+            if (a < area) { area = a; best = r; }
+          }
+        });
+        if (best && (b.left < best.left - 2 || b.right > best.right + 2))
+          out.push(name + " | SPILLS box by " + Math.round(Math.max(best.left - b.left, b.right - best.right)) + "px | '" + label + "'");
+        for (var j = i + 1; j < texts.length; j++) {
+          var o = inter(b, tb[j]);
+          if (o[0] > 3 && o[1] > 5)
+            out.push(name + " | OVERLAP | '" + label + "' x '" + texts[j].textContent.trim().slice(0, 34) + "'");
+        }
+      });
+    });
+    document.getElementById("out").textContent = out.join("\n") || "clean";
+  }, 700);
+};
+</script>
+</body></html>

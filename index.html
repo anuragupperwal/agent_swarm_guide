@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<script src="assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="index.html">Loop <span>→</span> Swarm</a>
+    <div class="crumbs">A visual study guide to agents, harnesses and swarms</div>
+    <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+  </div>
+</header>
+
+<div class="page">
+<main class="home">
+
+  <section class="home-hero">
+    <p class="eyebrow">Study guide · <b>agents, agent harnesses, agent swarms</b></p>
+    <h1>Loop to Swarm</h1>
+    <p class="lede">Start from a single model call. Build up one layer at a time: the agent loop, tools, reasoning, context and memory. Then the harness that keeps an agent dependable, and finally many agents spawning and coordinating with each other. Each chapter covers one concept in depth, with diagrams, a prediction to write before you read, and questions after.</p>
+    <div class="stat-row">
+      <div class="stat"><b>22</b><span>chapters in 5 parts</span></div>
+      <div class="stat"><b>L1 → L5</b><span>difficulty, left to right</span></div>
+      <div class="stat"><b>~18 h</b><span>reading, plus exercises</span></div>
+      <div class="stat"><b id="progress-count">0</b><span>chapters you've marked as explained</span></div>
+    </div>
+  </section>
+
+  <h2 id="stack">How the concepts stack</h2>
+  <p class="section-lede">Each layer adds the minimum needed to fix a limit of the layer below it. A model can't act, so an agent loop adds tools. An agent forgets and drifts, so context and memory are managed. An agent fails, leaks and costs money, so a harness adds control, limits and visibility. One agent can't hold a big problem, so several are coordinated. Your swarm harness sits at the top and depends on every layer below it.</p>
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg" viewBox="0 0 760 404" role="img" aria-label="Six stacked layers, bottom to top: the model, the agent, thinking context and memory, the harness, multi-agent systems, and your swarm harness. Each layer depends on the ones below it.">
+        <defs>
+          <marker id="stk-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <line class="e-muted" x1="40" y1="388" x2="40" y2="22" marker-end="url(#stk-ah)"/>
+        <text class="t-sm t-muted" x="26" y="206" text-anchor="middle" transform="rotate(-90 26 206)">each layer depends on the ones below</text>
+
+        <a href="chapters/20-swarm-harness-architecture.html">
+          <rect class="n-accent n-thick" x="96" y="16" width="548" height="52" rx="6"/>
+          <text class="t-b t-lg" x="116" y="38">Your swarm harness</text>
+          <text class="t-sm t-muted" x="116" y="56">spawn tree · budgets · traces · aggregation · evaluation</text>
+          <text class="t-mono t-accent" x="628" y="46" text-anchor="end">Ch 20–22</text>
+        </a>
+        <text class="t-mono t-accent" x="80" y="46" text-anchor="end">L5</text>
+
+        <a href="chapters/14-why-multi-agent.html">
+          <rect x="96" y="80" width="548" height="52" rx="6"/>
+          <text class="t-b t-lg" x="116" y="102">Multi-agent systems</text>
+          <text class="t-sm t-muted" x="116" y="120">why · topologies · spawning · communication · swarms · failures</text>
+          <text class="t-mono t-muted" x="628" y="110" text-anchor="end">Ch 14–19</text>
+        </a>
+        <text class="t-mono t-muted" x="80" y="110" text-anchor="end">L4</text>
+
+        <a href="chapters/08-agent-harness.html">
+          <rect x="96" y="144" width="548" height="52" rx="6"/>
+          <text class="t-b t-lg" x="116" y="166">The harness</text>
+          <text class="t-sm t-muted" x="116" y="184">control flow · concurrency · reliability · security · observability</text>
+          <text class="t-mono t-muted" x="628" y="174" text-anchor="end">Ch 08–13</text>
+        </a>
+        <text class="t-mono t-muted" x="80" y="174" text-anchor="end">L3</text>
+
+        <a href="chapters/05-reasoning-and-planning.html">
+          <rect x="96" y="208" width="548" height="52" rx="6"/>
+          <text class="t-b t-lg" x="116" y="230">Thinking, context, memory</text>
+          <text class="t-sm t-muted" x="116" y="248">reasoning patterns · context engineering · memory</text>
+          <text class="t-mono t-muted" x="628" y="238" text-anchor="end">Ch 05–07</text>
+        </a>
+        <text class="t-mono t-muted" x="80" y="238" text-anchor="end">L2</text>
+
+        <a href="chapters/02-workflows-vs-agents.html">
+          <rect x="96" y="272" width="548" height="52" rx="6"/>
+          <text class="t-b t-lg" x="116" y="294">The agent</text>
+          <text class="t-sm t-muted" x="116" y="312">workflows vs agents · the loop · tools</text>
+          <text class="t-mono t-muted" x="628" y="302" text-anchor="end">Ch 02–04</text>
+        </a>
+        <text class="t-mono t-muted" x="80" y="302" text-anchor="end">L1</text>
+
+        <a href="chapters/01-llm-as-a-component.html">
+          <rect class="n-sunken" x="96" y="336" width="548" height="52" rx="6"/>
+          <text class="t-b t-lg" x="116" y="358">The model</text>
+          <text class="t-sm t-muted" x="116" y="376">a stateless function: tokens in, tokens out</text>
+          <text class="t-mono t-muted" x="628" y="366" text-anchor="end">Ch 01</text>
+        </a>
+        <text class="t-mono t-muted" x="80" y="366" text-anchor="end">L1</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 0.1</b>The concept stack. Every layer is clickable. When you get lost in a later chapter, find which layer you're on and go down one.</figcaption>
+  </figure>
+
+  <h2 id="map">Mind map</h2>
+  <p class="section-lede">The same material as a map. Within a part, read top to bottom. From one part to the next, left to right, the material gets harder. Teal chapters are the core path for building your swarm harness. Click any chapter to open it.</p>
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 1000 450" role="img" aria-label="Mind map: the root splits into five parts, Foundations, Thinking and memory, The harness, Multi-agent systems, and Putting it together. Each part lists its chapters. The core path chapters are highlighted.">
+        <rect class="n-plain n-thick" x="380" y="12" width="240" height="40" rx="6"/>
+        <text class="t-display t-lg" x="500" y="37" text-anchor="middle">Agents → swarms</text>
+        <line class="e-muted" x1="500" y1="52" x2="500" y2="74"/>
+        <line class="e-muted" x1="100" y1="74" x2="900" y2="74"/>
+        <line class="e-muted" x1="100" y1="74" x2="100" y2="92"/>
+        <line class="e-muted" x1="300" y1="74" x2="300" y2="92"/>
+        <line class="e-muted" x1="700" y1="74" x2="700" y2="92"/>
+        <line class="e-muted" x1="900" y1="74" x2="900" y2="92"/>
+        <line class="e-muted" x1="500" y1="74" x2="500" y2="92"/>
+
+        <!-- Part 1 -->
+        <rect class="n-sunken" x="10" y="92" width="180" height="50" rx="6"/>
+        <text class="t-caps t-muted" x="100" y="110" text-anchor="middle">Part 1 · L1</text>
+        <text class="t-b" x="100" y="130" text-anchor="middle">Foundations</text>
+        <line class="e-line" x1="16" y1="142" x2="16" y2="295"/>
+        <line class="e-line" x1="16" y1="175" x2="30" y2="175"/>
+        <line class="e-line" x1="16" y1="215" x2="30" y2="215"/>
+        <line class="e-line" x1="16" y1="255" x2="30" y2="255"/>
+        <line class="e-line" x1="16" y1="295" x2="30" y2="295"/>
+        <a href="chapters/01-llm-as-a-component.html"><rect class="n-accent" x="30" y="160" width="166" height="30" rx="5"/><text x="38" y="179"><tspan class="t-mono">01</tspan> LLM as a component</text></a>
+        <a href="chapters/02-workflows-vs-agents.html"><rect x="30" y="200" width="166" height="30" rx="5"/><text x="38" y="219"><tspan class="t-mono">02</tspan> Workflows vs agents</text></a>
+        <a href="chapters/03-agent-loop.html"><rect class="n-accent" x="30" y="240" width="166" height="30" rx="5"/><text x="38" y="259"><tspan class="t-mono">03</tspan> The agent loop</text></a>
+        <a href="chapters/04-tool-use.html"><rect class="n-accent" x="30" y="280" width="166" height="30" rx="5"/><text x="38" y="299"><tspan class="t-mono">04</tspan> Tool use</text></a>
+
+        <!-- Part 2 -->
+        <rect class="n-sunken" x="210" y="92" width="180" height="50" rx="6"/>
+        <text class="t-caps t-muted" x="300" y="110" text-anchor="middle">Part 2 · L2</text>
+        <text class="t-b" x="300" y="130" text-anchor="middle">Thinking &amp; memory</text>
+        <line class="e-line" x1="216" y1="142" x2="216" y2="255"/>
+        <line class="e-line" x1="216" y1="175" x2="230" y2="175"/>
+        <line class="e-line" x1="216" y1="215" x2="230" y2="215"/>
+        <line class="e-line" x1="216" y1="255" x2="230" y2="255"/>
+        <a href="chapters/05-reasoning-and-planning.html"><rect x="230" y="160" width="166" height="30" rx="5"/><text x="238" y="179"><tspan class="t-mono">05</tspan> Reasoning &amp; planning</text></a>
+        <a href="chapters/06-context-engineering.html"><rect x="230" y="200" width="166" height="30" rx="5"/><text x="238" y="219"><tspan class="t-mono">06</tspan> Context engineering</text></a>
+        <a href="chapters/07-memory.html"><rect x="230" y="240" width="166" height="30" rx="5"/><text x="238" y="259"><tspan class="t-mono">07</tspan> Memory systems</text></a>
+
+        <!-- Part 3 -->
+        <rect class="n-sunken" x="410" y="92" width="180" height="50" rx="6"/>
+        <text class="t-caps t-muted" x="500" y="110" text-anchor="middle">Part 3 · L3</text>
+        <text class="t-b" x="500" y="130" text-anchor="middle">The harness</text>
+        <line class="e-line" x1="416" y1="142" x2="416" y2="375"/>
+        <line class="e-line" x1="416" y1="175" x2="430" y2="175"/>
+        <line class="e-line" x1="416" y1="215" x2="430" y2="215"/>
+        <line class="e-line" x1="416" y1="255" x2="430" y2="255"/>
+        <line class="e-line" x1="416" y1="295" x2="430" y2="295"/>
+        <line class="e-line" x1="416" y1="335" x2="430" y2="335"/>
+        <line class="e-line" x1="416" y1="375" x2="430" y2="375"/>
+        <a href="chapters/08-agent-harness.html"><rect class="n-accent" x="430" y="160" width="166" height="30" rx="5"/><text x="438" y="179"><tspan class="t-mono">08</tspan> What a harness is</text></a>
+        <a href="chapters/09-control-flow-and-state.html"><rect x="430" y="200" width="166" height="30" rx="5"/><text x="438" y="219"><tspan class="t-mono">09</tspan> Control flow &amp; state</text></a>
+        <a href="chapters/10-concurrency.html"><rect class="n-accent" x="430" y="240" width="166" height="30" rx="5"/><text x="438" y="259"><tspan class="t-mono">10</tspan> Concurrency</text></a>
+        <a href="chapters/11-reliability.html"><rect class="n-accent" x="430" y="280" width="166" height="30" rx="5"/><text x="438" y="299"><tspan class="t-mono">11</tspan> Reliability</text></a>
+        <a href="chapters/12-security.html"><rect x="430" y="320" width="166" height="30" rx="5"/><text x="438" y="339"><tspan class="t-mono">12</tspan> Security &amp; safety</text></a>
+        <a href="chapters/13-observability-and-evals.html"><rect class="n-accent" x="430" y="360" width="166" height="30" rx="5"/><text x="438" y="379"><tspan class="t-mono">13</tspan> Observability &amp; evals</text></a>
+
+        <!-- Part 4 -->
+        <rect class="n-sunken" x="610" y="92" width="180" height="50" rx="6"/>
+        <text class="t-caps t-muted" x="700" y="110" text-anchor="middle">Part 4 · L4</text>
+        <text class="t-b" x="700" y="130" text-anchor="middle">Multi-agent systems</text>
+        <line class="e-line" x1="616" y1="142" x2="616" y2="375"/>
+        <line class="e-line" x1="616" y1="175" x2="630" y2="175"/>
+        <line class="e-line" x1="616" y1="215" x2="630" y2="215"/>
+        <line class="e-line" x1="616" y1="255" x2="630" y2="255"/>
+        <line class="e-line" x1="616" y1="295" x2="630" y2="295"/>
+        <line class="e-line" x1="616" y1="335" x2="630" y2="335"/>
+        <line class="e-line" x1="616" y1="375" x2="630" y2="375"/>
+        <a href="chapters/14-why-multi-agent.html"><rect x="630" y="160" width="166" height="30" rx="5"/><text x="638" y="179"><tspan class="t-mono">14</tspan> Why multi-agent</text></a>
+        <a href="chapters/15-topologies.html"><rect class="n-accent" x="630" y="200" width="166" height="30" rx="5"/><text x="638" y="219"><tspan class="t-mono">15</tspan> Topologies</text></a>
+        <a href="chapters/16-spawning-and-delegation.html"><rect class="n-accent" x="630" y="240" width="166" height="30" rx="5"/><text x="638" y="259"><tspan class="t-mono">16</tspan> Spawning &amp; delegation</text></a>
+        <a href="chapters/17-communication.html"><rect x="630" y="280" width="166" height="30" rx="5"/><text x="638" y="299"><tspan class="t-mono">17</tspan> Communication</text></a>
+        <a href="chapters/18-swarm-intelligence.html"><rect x="630" y="320" width="166" height="30" rx="5"/><text x="638" y="339"><tspan class="t-mono">18</tspan> Swarm intelligence</text></a>
+        <a href="chapters/19-multi-agent-failures.html"><rect x="630" y="360" width="166" height="30" rx="5"/><text x="638" y="379"><tspan class="t-mono">19</tspan> Failure modes</text></a>
+
+        <!-- Part 5 -->
+        <rect class="n-sunken" x="810" y="92" width="180" height="50" rx="6"/>
+        <text class="t-caps t-muted" x="900" y="110" text-anchor="middle">Part 5 · L5</text>
+        <text class="t-b" x="900" y="130" text-anchor="middle">Putting it together</text>
+        <line class="e-line" x1="816" y1="142" x2="816" y2="295"/>
+        <line class="e-line" x1="816" y1="175" x2="830" y2="175"/>
+        <line class="e-line" x1="816" y1="215" x2="830" y2="215"/>
+        <line class="e-line" x1="816" y1="255" x2="830" y2="255"/>
+        <line class="e-line" x1="816" y1="295" x2="830" y2="295"/>
+        <a href="chapters/20-swarm-harness-architecture.html"><rect class="n-accent" x="830" y="160" width="166" height="30" rx="5"/><text x="838" y="179"><tspan class="t-mono">20</tspan> Swarm harness design</text></a>
+        <a href="chapters/21-framework-landscape.html"><rect x="830" y="200" width="166" height="30" rx="5"/><text x="838" y="219"><tspan class="t-mono">21</tspan> Framework landscape</text></a>
+        <a href="chapters/22-interview-bank.html"><rect x="830" y="240" width="166" height="30" rx="5"/><text x="838" y="259"><tspan class="t-mono">22</tspan> Interview bank</text></a>
+        <a href="glossary.html"><rect class="n-ghost" x="830" y="280" width="166" height="30" rx="5"/><text class="t-muted" x="838" y="299"><tspan class="t-mono">A–Z</tspan> Glossary</text></a>
+
+        <!-- legend -->
+        <rect class="n-accent" x="30" y="420" width="16" height="12" rx="2"/>
+        <text class="t-sm" x="54" y="430">Core path for your swarm harness</text>
+        <rect x="260" y="420" width="16" height="12" rx="2"/>
+        <text class="t-sm" x="284" y="430">Supporting chapter</text>
+        <text class="t-sm t-muted" x="970" y="430" text-anchor="end">difficulty rises left to right: L1 → L5</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 0.2</b>Chapter map. On a phone, scroll the map sideways.</figcaption>
+  </figure>
+
+  <h2 id="how">How to study a chapter</h2>
+  <p class="section-lede">This guide is built for the loop in <code>docs/LEARNING_PLAYBOOK.md</code>. Reading without predicting first is how a week of study turns into nothing you can recall.</p>
+  <ol class="steps">
+    <li><b>Predict</b>Answer the amber <em>Predict</em> box in <code>docs/LEARNING_NOTES.md</code> before you read. Wrong answers are the point: they show you what to read carefully.</li>
+    <li><b>Read with a pen</b>After each section, close it and redraw its main figure from memory. Labels count; boxes alone don't.</li>
+    <li><b>Check yourself</b>Answer every question at the end before you open it. Mark the ones you missed and reread only those sections.</li>
+    <li><b>Explain it back</b>Explain the chapter aloud, without notes. Only then tick “I can explain this”. The count above tracks it.</li>
+    <li><b>Go to the source</b>Read at least one primary source from the chapter's list. The guide is a map. The papers and docs are the territory.</li>
+  </ol>
+  <div class="box stop">
+    <span class="box-label">Checkpoints</span>
+    <p>Chapters 02, 03, 10, 11 and 16 answer your open Round 2 questions. Each has a dashed checkpoint box before the answer. Write your Round 2 answer first, then read on. If you read the answer first, you lose the comparison.</p>
+  </div>
+
+  <h2 id="paths">Three ways through</h2>
+  <div class="paths">
+    <div class="card">
+      <h4>Build the swarm harness</h4>
+      <p class="seq">01 → 03 → 04 → 08 → 10 → 11 → 13 → 14 → 15 → 16 → 20</p>
+      <p>The minimum to get through Stages 0–6 of your plan. Read the others when a stage needs them.</p>
+    </div>
+    <div class="card">
+      <h4>Interview preparation</h4>
+      <p class="seq">02 → 03 → 05 → 06 → 14 → 15 → 19 → 22</p>
+      <p>The concepts interviewers test most: definitions, trade-offs and failure modes. Chapter 22 has system design drills.</p>
+    </div>
+    <div class="card">
+      <h4>Research depth</h4>
+      <p class="seq">05 → 07 → 13 → 18 → 19 → 21</p>
+      <p>The papers behind reasoning, memory, evaluation, swarm behavior and failure taxonomies.</p>
+    </div>
+  </div>
+
+  <h2 id="chapters">All chapters</h2>
+
+  <section class="part-block">
+    <h3><span class="eyebrow">Part 1 · L1</span> Foundations</h3>
+    <p>What a model is, what an agent adds, and how a model uses tools.</p>
+    <ol class="ch-list">
+      <li class="ch-row is-core" data-ch="01"><a href="chapters/01-llm-as-a-component.html"><span class="ch-num">01</span><span class="ch-name">The LLM as a component</span><span class="ch-when">L1 · 40 min</span><span class="ch-desc">Why a stateless next-token function needs a harness around it.</span></a></li>
+      <li class="ch-row" data-ch="02"><a href="chapters/02-workflows-vs-agents.html"><span class="ch-num">02</span><span class="ch-name">Workflows vs agents</span><span class="ch-when">L1 · 40 min</span><span class="ch-desc">The autonomy spectrum, from one call to a model that directs its own process.</span></a></li>
+      <li class="ch-row is-core" data-ch="03"><a href="chapters/03-agent-loop.html"><span class="ch-num">03</span><span class="ch-name">The agent loop</span><span class="ch-when">L1 · 45 min</span><span class="ch-desc">The minimum parts of an agent, and the while loop at the center of it.</span></a></li>
+      <li class="ch-row is-core" data-ch="04"><a href="chapters/04-tool-use.html"><span class="ch-num">04</span><span class="ch-name">Tool use in depth</span><span class="ch-when">L1 · 50 min</span><span class="ch-desc">How a model “calls” a function it can never run itself.</span></a></li>
+    </ol>
+  </section>
+
+  <section class="part-block">
+    <h3><span class="eyebrow">Part 2 · L2</span> Thinking, context and memory</h3>
+    <p>How an agent reasons, what it can see, and what it remembers.</p>
+    <ol class="ch-list">
+      <li class="ch-row" data-ch="05"><a href="chapters/05-reasoning-and-planning.html"><span class="ch-num">05</span><span class="ch-name">Reasoning and planning patterns</span><span class="ch-when">L2 · 60 min</span><span class="ch-desc">CoT, ReAct, plan-and-execute, reflection and search, and when each pays off.</span></a></li>
+      <li class="ch-row" data-ch="06"><a href="chapters/06-context-engineering.html"><span class="ch-num">06</span><span class="ch-name">Context engineering</span><span class="ch-when">L2 · 50 min</span><span class="ch-desc">The context window is an agent's only working memory. Managing it is the main job.</span></a></li>
+      <li class="ch-row" data-ch="07"><a href="chapters/07-memory.html"><span class="ch-num">07</span><span class="ch-name">Memory systems</span><span class="ch-when">L2 · 75 min</span><span class="ch-desc">Working, episodic, semantic and procedural memory, and the policies for reading and writing them.</span></a></li>
+    </ol>
+  </section>
+
+  <section class="part-block">
+    <h3><span class="eyebrow">Part 3 · L3</span> The harness</h3>
+    <p>Everything around the model that makes an agent controllable, fast, safe and measurable.</p>
+    <ol class="ch-list">
+      <li class="ch-row is-core" data-ch="08"><a href="chapters/08-agent-harness.html"><span class="ch-num">08</span><span class="ch-name">What a harness is</span><span class="ch-when">L3 · 45 min</span><span class="ch-desc">The runtime that turns a model into a dependable agent, with its parts named.</span></a></li>
+      <li class="ch-row" data-ch="09"><a href="chapters/09-control-flow-and-state.html"><span class="ch-num">09</span><span class="ch-name">Control flow and state</span><span class="ch-when">L3 · 50 min</span><span class="ch-desc">State machines, graphs, checkpoints and execution you can resume.</span></a></li>
+      <li class="ch-row is-core" data-ch="10"><a href="chapters/10-concurrency.html"><span class="ch-num">10</span><span class="ch-name">Concurrency for agents</span><span class="ch-when">L3 · 70 min</span><span class="ch-desc">Agents spend most of their time waiting. asyncio runs many of them on one thread.</span></a></li>
+      <li class="ch-row is-core" data-ch="11"><a href="chapters/11-reliability.html"><span class="ch-num">11</span><span class="ch-name">Reliability engineering</span><span class="ch-when">L3 · 50 min</span><span class="ch-desc">Retries, timeouts, budgets, validation, and degrading gracefully when things fail.</span></a></li>
+      <li class="ch-row" data-ch="12"><a href="chapters/12-security.html"><span class="ch-num">12</span><span class="ch-name">Security and safety</span><span class="ch-when">L3 · 50 min</span><span class="ch-desc">Prompt injection, the lethal trifecta, sandboxing and least privilege.</span></a></li>
+      <li class="ch-row is-core" data-ch="13"><a href="chapters/13-observability-and-evals.html"><span class="ch-num">13</span><span class="ch-name">Observability and evaluation</span><span class="ch-when">L3 · 55 min</span><span class="ch-desc">Traces and spans, and how to tell whether an agent actually works.</span></a></li>
+    </ol>
+  </section>
+
+  <section class="part-block">
+    <h3><span class="eyebrow">Part 4 · L4</span> Multi-agent systems and swarms</h3>
+    <p>When one agent isn't enough, how many agents are arranged, spawned, connected, and how they fail.</p>
+    <ol class="ch-list">
+      <li class="ch-row" data-ch="14"><a href="chapters/14-why-multi-agent.html"><span class="ch-num">14</span><span class="ch-name">Why multiple agents (and why not)</span><span class="ch-when">L4 · 40 min</span><span class="ch-desc">Context isolation, parallelism and specialization, weighed against cost and coordination.</span></a></li>
+      <li class="ch-row is-core" data-ch="15"><a href="chapters/15-topologies.html"><span class="ch-num">15</span><span class="ch-name">Multi-agent topologies</span><span class="ch-when">L4 · 55 min</span><span class="ch-desc">Pipelines, orchestrator-workers, hierarchies, meshes, blackboards, handoffs and debate.</span></a></li>
+      <li class="ch-row is-core" data-ch="16"><a href="chapters/16-spawning-and-delegation.html"><span class="ch-num">16</span><span class="ch-name">Spawning and recursive delegation</span><span class="ch-when">L4 · 60 min</span><span class="ch-desc">How an agent creates another agent, hands it work, and gets the result back.</span></a></li>
+      <li class="ch-row" data-ch="17"><a href="chapters/17-communication.html"><span class="ch-num">17</span><span class="ch-name">Communication and coordination</span><span class="ch-when">L4 · 60 min</span><span class="ch-desc">Message passing, shared state, handoffs, and the protocols that standardize them.</span></a></li>
+      <li class="ch-row" data-ch="18"><a href="chapters/18-swarm-intelligence.html"><span class="ch-num">18</span><span class="ch-name">Swarm intelligence: from ants to LLMs</span><span class="ch-when">L4 · 45 min</span><span class="ch-desc">Emergence, stigmergy and local rules, and which of them carry over to LLM swarms.</span></a></li>
+      <li class="ch-row" data-ch="19"><a href="chapters/19-multi-agent-failures.html"><span class="ch-num">19</span><span class="ch-name">How multi-agent systems fail</span><span class="ch-when">L4 · 45 min</span><span class="ch-desc">A taxonomy of failures, the signal each leaves in a trace, and the fixes that work.</span></a></li>
+    </ol>
+  </section>
+
+  <section class="part-block">
+    <h3><span class="eyebrow">Part 5 · L5</span> Putting it together</h3>
+    <p>A reference design for your project, the framework landscape, and review.</p>
+    <ol class="ch-list">
+      <li class="ch-row is-core" data-ch="20"><a href="chapters/20-swarm-harness-architecture.html"><span class="ch-num">20</span><span class="ch-name">Designing a swarm harness</span><span class="ch-when">L5 · 60 min</span><span class="ch-desc">A reference design and its design space. The decisions are left open for you to make.</span></a></li>
+      <li class="ch-row" data-ch="21"><a href="chapters/21-framework-landscape.html"><span class="ch-num">21</span><span class="ch-name">The framework landscape</span><span class="ch-when">L5 · 45 min</span><span class="ch-desc">How LangGraph, the OpenAI Agents SDK, the Claude Agent SDK and others map onto these concepts.</span></a></li>
+      <li class="ch-row" data-ch="22"><a href="chapters/22-interview-bank.html"><span class="ch-num">22</span><span class="ch-name">Review and interview bank</span><span class="ch-when">L5 · open</span><span class="ch-desc">Questions by level, system design drills, and a method for answering them.</span></a></li>
+    </ol>
+    <p class="small" style="margin-top:12px"><a href="glossary.html">Glossary</a>: every term in the guide, with a one-line definition and the chapter it comes from.</p>
+  </section>
+
+  <footer class="site-foot">
+    <p>Written November 2026. Model names, API fields and framework features change every few months. The concepts change slowly. When an API detail here disagrees with current documentation, trust the documentation. Build status: <code>PROGRESS.md</code>.</p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

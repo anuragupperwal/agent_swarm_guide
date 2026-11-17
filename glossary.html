@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Glossary · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<script src="assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="index.html">Loop <span>→</span> Swarm</a>
+    <div class="crumbs"><a href="index.html">Guide</a> · Reference · Glossary</div>
+    <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+  </div>
+</header>
+
+<div class="page">
+<main class="chapter">
+
+  <header class="ch-head">
+    <p class="eyebrow"><b>Reference</b></p>
+    <h1>Glossary</h1>
+    <p class="lede">Every key term in the guide in one sentence, with a link to the chapter section that explains it properly.</p>
+  </header>
+
+  <nav class="gloss-index" aria-label="Jump to a letter">
+    <a href="#g-a">A</a>
+    <a href="#g-b">B</a>
+    <a href="#g-c">C</a>
+    <a href="#g-d">D</a>
+    <a href="#g-e">E</a>
+    <a href="#g-f">F</a>
+    <a href="#g-g">G</a>
+    <a href="#g-h">H</a>
+    <a href="#g-i">I</a>
+    <a href="#g-j">J</a>
+    <a href="#g-l">L</a>
+    <a href="#g-m">M</a>
+    <a href="#g-n">N</a>
+    <a href="#g-o">O</a>
+    <a href="#g-p">P</a>
+    <a href="#g-r">R</a>
+    <a href="#g-s">S</a>
+    <a href="#g-t">T</a>
+    <a href="#g-v">V</a>
+    <a href="#g-w">W</a>
+  </nav>
+
+  <h2 id="g-a">A</h2>
+  <dl class="gloss">
+    <dt id="term-a2a">A2A (Agent2Agent)</dt>
+    <dd>An open protocol, announced by Google in 2025 and later moved to the Linux Foundation, that lets one agent find another through its published “agent card” and send it tasks over HTTP, without seeing that agent's tools or memory. <span class="see">See <a href="chapters/17-communication.html#protocols">Ch 17 · Standard protocols: MCP and A2A</a></span></dd>
+
+    <dt id="term-agent">Agent</dt>
+    <dd>An LLM running in a loop in which the model itself picks the next step (usually a <a href="#term-tool">tool</a> call) after seeing the result of the last one, until it decides the task is done or the harness stops it. <span class="see">See <a href="chapters/02-workflows-vs-agents.html#agents">Ch 02 · Agents: the model owns the loop</a></span></dd>
+
+    <dt id="term-aci">Agent-computer interface (ACI)</dt>
+    <dd>The tools as the model experiences them (names, descriptions, parameters, output size and error messages), designed with the same care you would give a human user interface. The term comes from the SWE-agent paper (Yang et al., 2024). <span class="see">See <a href="chapters/04-tool-use.html#aci">Ch 04 · Tool design is interface design</a></span></dd>
+
+    <dt id="term-agent-loop">Agent loop</dt>
+    <dd>The core cycle of every agent: call the model, run any tools it asked for, add the results to the history, and repeat until a stop condition fires. <span class="see">See <a href="chapters/03-agent-loop.html#loop">Ch 03 · The loop in code</a></span></dd>
+
+    <dt id="term-aggregation">Aggregation</dt>
+    <dd>The step where a parent agent combines its children's results into one answer, including deciding what to do with results that are missing, failed or contradictory. <span class="see">See <a href="chapters/16-spawning-and-delegation.html#aggregation">Ch 16 · Aggregation</a></span></dd>
+
+    <dt id="term-augmented-llm">Augmented LLM</dt>
+    <dd>An LLM given retrieval, tools and memory, which Anthropic's “Building effective agents” treats as the basic building block of every workflow and agent. <span class="see">See <a href="chapters/02-workflows-vs-agents.html#augmented">Ch 02 · The augmented LLM</a></span></dd>
+
+    <dt id="term-autonomy-spectrum">Autonomy spectrum</dt>
+    <dd>The idea that being “agentic” is a matter of degree: systems range from fixed code that calls a model once to agents that own the whole control flow, and cost and unpredictability rise as the model decides more. <span class="see">See <a href="chapters/02-workflows-vs-agents.html#spectrum">Ch 02 · The autonomy spectrum</a></span></dd>
+  </dl>
+
+  <h2 id="g-b">B</h2>
+  <dl class="gloss">
+    <dt id="term-backoff">Backoff (exponential, with jitter)</dt>
+    <dd>A retry policy that waits longer after each failure, typically doubling the delay each time (exponential), and adds a random amount (jitter) so that many clients that failed together don't all retry at the same moment. <span class="see">See <a href="chapters/11-reliability.html#retries">Ch 11 · Retries, backoff and jitter</a></span></dd>
+
+    <dt id="term-blackboard">Blackboard</dt>
+    <dd>A shared store that agents read from and write to, so they coordinate through what is posted there instead of messaging each other directly. <span class="see">See <a href="chapters/15-topologies.html#blackboard">Ch 15 · Shared medium: the blackboard</a></span></dd>
+
+    <dt id="term-budget">Budget (token, step, time, agent)</dt>
+    <dd>A hard limit, enforced in code rather than asked for in the prompt, on what a run may use up: tokens, steps (model calls), wall-clock time, or the number of agents it creates. <span class="see">See <a href="chapters/11-reliability.html#budgets">Ch 11 · Budgets and where they are enforced</a></span></dd>
+
+    <dt id="term-budget-pool">Budget pool vs slice</dt>
+    <dd>Two ways to share a run's budget among child agents: slices give each child a fixed share up front (simple, but unused share is wasted), while a pool lets every agent draw from one shared balance (efficient, but one greedy child can starve the rest). <span class="see">See <a href="chapters/16-spawning-and-delegation.html#budgets">Ch 16 · Budgets: slices or a pool</a></span></dd>
+  </dl>
+
+  <h2 id="g-c">C</h2>
+  <dl class="gloss">
+    <dt id="term-camel">CaMeL</dt>
+    <dd>A prompt-injection defense from Google DeepMind (Debenedetti et al., 2025) that makes the <a href="#term-dual-llm">dual-LLM pattern</a> rigorous: a privileged model writes the plan as a small program in restricted Python, and a custom interpreter runs it, tracking where every value came from and checking a security policy before each tool call. <span class="see">See <a href="chapters/12-security.html#dual-llm">Ch 12 · Dual LLM and CaMeL</a></span></dd>
+
+    <dt id="term-chain-of-thought">Chain-of-thought (CoT)</dt>
+    <dd>Getting a model to write out intermediate reasoning steps before its final answer, which tends to improve accuracy on multi-step problems. <span class="see">See <a href="chapters/05-reasoning-and-planning.html#cot">Ch 05 · Chain-of-thought and self-consistency</a></span></dd>
+
+    <dt id="term-checkpoint">Checkpoint</dt>
+    <dd>A saved snapshot of a run's state, usually taken after each step, so the run can resume after a crash, or be replayed or forked from that point. <span class="see">See <a href="chapters/09-control-flow-and-state.html#checkpoints">Ch 09 · Checkpoints, resume, replay and fork</a></span></dd>
+
+    <dt id="term-circuit-breaker">Circuit breaker</dt>
+    <dd>A guard on calls to one dependency that stops sending them, failing fast instead, once recent failures cross a threshold, and later lets a trial call through to test whether the dependency has recovered. <span class="see">See <a href="chapters/11-reliability.html#circuit-breakers">Ch 11 · Circuit breakers</a></span></dd>
+
+    <dt id="term-coala">CoALA</dt>
+    <dd>“Cognitive Architectures for Language Agents” (Sumers et al., 2024), a framework that describes an agent by its memory modules (<a href="#term-working-memory">working</a>, <a href="#term-episodic-memory">episodic</a>, <a href="#term-semantic-memory">semantic</a>, <a href="#term-procedural-memory">procedural</a>), its actions and its decision cycle. <span class="see">See <a href="chapters/07-memory.html">Ch 07 · Memory systems</a></span></dd>
+
+    <dt id="term-compaction">Compaction</dt>
+    <dd>Summarizing or trimming the conversation history as it nears the context limit, so the agent can keep working from a shorter context that keeps what matters. <span class="see">See <a href="chapters/06-context-engineering.html#compaction">Ch 06 · Compaction and clearing old tool results</a></span></dd>
+
+    <dt id="term-consolidation">Consolidation</dt>
+    <dd>Periodically merging, deduplicating and summarizing stored memories (for example, turning many similar episodes into one general fact) so the memory store stays small and consistent. <span class="see">See <a href="chapters/07-memory.html">Ch 07 · Memory systems</a></span></dd>
+
+    <dt id="term-context-engineering">Context engineering</dt>
+    <dd>Deciding exactly which tokens go into the model's context window at each step (instructions, tools, history, retrieved data) so the model gets the smallest set of high-signal information it needs. <span class="see">See <a href="chapters/06-context-engineering.html#big-idea">Ch 06 · The big idea</a></span></dd>
+
+    <dt id="term-context-rot">Context rot</dt>
+    <dd>The observed tendency of a model to use the information in its context less reliably as the input grows longer, even on simple tasks. <span class="see">See <a href="chapters/06-context-engineering.html#attention">Ch 06 · Why more context isn't free</a></span></dd>
+
+    <dt id="term-context-window">Context window</dt>
+    <dd>The maximum amount of text, counted in <a href="#term-token">tokens</a>, that a model can work with in one call; because the model keeps nothing between calls, it is the model's only memory. <span class="see">See <a href="chapters/01-llm-as-a-component.html#stateless">Ch 01 · Stateless: the context window is its only memory</a></span></dd>
+
+    <dt id="term-contract-net">Contract net</dt>
+    <dd>A task-allocation protocol (Reid G. Smith, 1980) in which a manager announces a task, capable agents send bids, the manager awards the task to the best bid, and the winner reports the result. <span class="see">See <a href="chapters/17-communication.html#contract-net">Ch 17 · The contract net protocol</a></span></dd>
+
+    <dt id="term-coroutine">Coroutine</dt>
+    <dd>In Python, a function defined with <code>async def</code> that can pause at each <code>await</code> and let other coroutines run on the same thread while it waits for I/O. <span class="see">See <a href="chapters/10-concurrency.html">Ch 10 · Concurrency for agents</a></span></dd>
+  </dl>
+
+  <h2 id="g-d">D</h2>
+  <dl class="gloss">
+    <dt id="term-deadlock">Deadlock</dt>
+    <dd>A state in which two or more agents or tasks are each waiting for another to act first, so none of them can ever continue; a timeout on every wait is the usual way out. <span class="see">See <a href="chapters/17-communication.html#coordination">Ch 17 · Coordination failures</a></span></dd>
+
+    <dt id="term-debate">Debate (multi-agent)</dt>
+    <dd>A pattern in which several agents answer the same question, read each other's answers and revise over a few rounds, in the hope of a better final answer than any one would give alone (the evidence on when it helps is mixed). <span class="see">See <a href="chapters/15-topologies.html#debate">Ch 15 · Collective: debate and voting</a></span></dd>
+
+    <dt id="term-dual-llm">Dual-LLM pattern</dt>
+    <dd>A prompt-injection defense proposed by Simon Willison in 2023, in which the privileged LLM that chooses actions never sees untrusted content, and a quarantined LLM that reads untrusted content has no tools. <span class="see">See <a href="chapters/12-security.html#dual-llm">Ch 12 · Dual LLM and CaMeL</a></span></dd>
+
+    <dt id="term-durable-execution">Durable execution</dt>
+    <dd>Running a workflow so that every completed step is recorded, and after a crash the run resumes from that history without redoing finished steps; Temporal is the best-known runtime of this kind. <span class="see">See <a href="chapters/09-control-flow-and-state.html#durable">Ch 09 · Durable execution and idempotency</a></span></dd>
+  </dl>
+
+  <h2 id="g-e">E</h2>
+  <dl class="gloss">
+    <dt id="term-embedding">Embedding</dt>
+    <dd>A list of numbers (a vector) that a model produces to represent the meaning of a piece of text, so texts with similar meanings land close together and can be found by similarity search. <span class="see">See <a href="chapters/07-memory.html">Ch 07 · Memory systems</a></span></dd>
+
+    <dt id="term-emergence">Emergence</dt>
+    <dd>A property of a group that no individual has and no rule mentions, such as an ant colony settling on a short path that no single ant's rule describes. <span class="see">See <a href="chapters/18-swarm-intelligence.html#what">Ch 18 · What “swarm intelligence” actually means</a></span></dd>
+
+    <dt id="term-episodic-memory">Episodic memory</dt>
+    <dd>Memory of specific past events, such as earlier runs, conversations or attempts, that an agent can recall to guide what it does now. <span class="see">See <a href="chapters/07-memory.html">Ch 07 · Memory systems</a></span></dd>
+
+    <dt id="term-evaluator-optimizer">Evaluator-optimizer</dt>
+    <dd>A workflow pattern in which one LLM call produces an answer and another evaluates it and gives feedback, looping until the evaluation passes or a limit is reached. <span class="see">See <a href="chapters/02-workflows-vs-agents.html#patterns">Ch 02 · Five workflow patterns</a></span></dd>
+
+    <dt id="term-event-loop">Event loop</dt>
+    <dd>The scheduler at the heart of Python's asyncio, which runs many <a href="#term-coroutine">coroutines</a> on one thread and switches to another one whenever the current one awaits something that isn't ready yet. <span class="see">See <a href="chapters/10-concurrency.html">Ch 10 · Concurrency for agents</a></span></dd>
+
+    <dt id="term-event-sourcing">Event sourcing</dt>
+    <dd>Storing a run as an append-only log of the events that happened, not just its current state, so the state can be rebuilt, and the history audited, by replaying the log. <span class="see">See <a href="chapters/09-control-flow-and-state.html#events">Ch 09 · Event sourcing</a></span></dd>
+  </dl>
+
+  <h2 id="g-f">F</h2>
+  <dl class="gloss">
+    <dt id="term-fan-out">Fan-out</dt>
+    <dd>The number of children one agent may spawn; together with the depth limit it bounds how big a spawn tree can grow, up to 1 + f + f² + … + f<sup>d</sup> agents. <span class="see">See <a href="chapters/16-spawning-and-delegation.html#limits">Ch 16 · Limits and the growth math</a></span></dd>
+
+    <dt id="term-function-calling">Function calling</dt>
+    <dd>Another name, used by OpenAI and others, for tool use: the model returns a structured request to call a named function with JSON arguments, and your code runs it. <span class="see">See <a href="chapters/04-tool-use.html#protocol">Ch 04 · The protocol</a></span></dd>
+  </dl>
+
+  <h2 id="g-g">G</h2>
+  <dl class="gloss">
+    <dt id="term-graceful-degradation">Graceful degradation</dt>
+    <dd>Carrying on with reduced but clearly labelled output when part of the system fails, for example returning four of five sub-results and saying which one is missing, rather than failing the whole task. <span class="see">See <a href="chapters/11-reliability.html#degradation">Ch 11 · Graceful degradation and partial results</a></span></dd>
+
+    <dt id="term-guardrail">Guardrail</dt>
+    <dd>A check that runs around the agent rather than inside its reasoning: on its input, on each tool call before it executes, or on its output before that output leaves the agent. <span class="see">See <a href="chapters/11-reliability.html#validation">Ch 11 · Validating output, and guardrails</a></span></dd>
+  </dl>
+
+  <h2 id="g-h">H</h2>
+  <dl class="gloss">
+    <dt id="term-handoff">Handoff</dt>
+    <dd>Passing control of a conversation from one agent to another, usually by having the first agent call a transfer tool, so the new agent takes over rather than reporting back. <span class="see">See <a href="chapters/15-topologies.html#decentralized">Ch 15 · Decentralized: mesh and handoff</a></span></dd>
+
+    <dt id="term-harness">Harness</dt>
+    <dd>All the code around the model that turns it into an agent: the loop driver, model client, tool executor, context manager, state store, permissions, budgets, tracing and human-approval hooks. <span class="see">See <a href="chapters/08-agent-harness.html#terms">Ch 08 · Harness, framework, scaffold, SDK</a></span></dd>
+
+    <dt id="term-hierarchical">Hierarchical topology</dt>
+    <dd>A multi-agent structure in which managers delegate to sub-managers, who delegate to workers, forming a tree; in effect, <a href="#term-orchestrator-worker">orchestrator-worker</a> applied at more than one level. <span class="see">See <a href="chapters/15-topologies.html#centralized">Ch 15 · Centralized: orchestrator-worker and hierarchy</a></span></dd>
+
+    <dt id="term-human-in-the-loop">Human-in-the-loop (HITL)</dt>
+    <dd>Designing a run to pause at chosen points so a person can approve, edit or reject what the agent proposes before it continues. <span class="see">See <a href="chapters/09-control-flow-and-state.html#interrupts">Ch 09 · Human-in-the-loop interrupts</a></span></dd>
+  </dl>
+
+  <h2 id="g-i">I</h2>
+  <dl class="gloss">
+    <dt id="term-idempotency">Idempotency</dt>
+    <dd>The property that doing an operation twice has the same effect as doing it once, which is what makes it safe to retry after a crash or a timeout. <span class="see">See <a href="chapters/11-reliability.html#idempotency">Ch 11 · Idempotency</a></span></dd>
+
+    <dt id="term-indirect-prompt-injection">Indirect prompt injection</dt>
+    <dd>An attack in which instructions are hidden in content the agent reads while working (a web page, an email, a document, a tool result) rather than typed by the user, and the model follows them as if they were legitimate. <span class="see">See <a href="chapters/12-security.html#injection">Ch 12 · Prompt injection: direct and indirect</a></span></dd>
+
+    <dt id="term-is-error"><code>is_error</code></dt>
+    <dd>A flag on a <a href="#term-tool-result"><code>tool_result</code></a> block telling the model that the tool call failed, so the error message comes back as an observation the model can read and react to instead of crashing the loop. <span class="see">See <a href="chapters/04-tool-use.html#errors">Ch 04 · Errors are observations</a></span></dd>
+  </dl>
+
+  <h2 id="g-j">J</h2>
+  <dl class="gloss">
+    <dt id="term-jit-retrieval">Just-in-time retrieval</dt>
+    <dd>Giving the agent tools to fetch information at the moment it needs it (search a folder, read a file by path) instead of loading everything into the context up front. <span class="see">See <a href="chapters/06-context-engineering.html#jit">Ch 06 · Just-in-time retrieval vs preloading</a></span></dd>
+  </dl>
+
+  <h2 id="g-l">L</h2>
+  <dl class="gloss">
+    <dt id="term-least-privilege">Least privilege</dt>
+    <dd>Giving each agent and tool only the permissions its task needs, so that a confused or hijacked agent can do as little damage as possible. <span class="see">See <a href="chapters/12-security.html#least-privilege">Ch 12 · Least privilege and capability scoping</a></span></dd>
+
+    <dt id="term-lethal-trifecta">Lethal trifecta</dt>
+    <dd>Simon Willison's 2025 name for an agent that combines access to private data, exposure to untrusted content and a way to send data out, which together let injected instructions steal that data. <span class="see">See <a href="chapters/12-security.html#trifecta">Ch 12 · The lethal trifecta</a></span></dd>
+
+    <dt id="term-livelock">Livelock</dt>
+    <dd>A coordination failure in which agents stay busy (for example, politely deferring to each other over and over) but none of them makes progress. <span class="see">See <a href="chapters/17-communication.html#coordination">Ch 17 · Coordination failures</a></span></dd>
+
+    <dt id="term-llm-as-judge">LLM-as-judge</dt>
+    <dd>Using a language model to grade outputs against a rubric; it scales to open-ended answers but has known biases (such as favoring one position, longer answers or its own outputs) and must be checked against human labels. <span class="see">See <a href="chapters/13-observability-and-evals.html#graders">Ch 13 · Graders: code, model, human</a></span></dd>
+
+    <dt id="term-loop-detection">Loop detection</dt>
+    <dd>Harness logic that notices when an agent is repeating itself, such as calling the same tool with the same arguments again and again, and steps in or stops the run. <span class="see">See <a href="chapters/11-reliability.html#loops">Ch 11 · Loop detection</a></span></dd>
+
+    <dt id="term-lost-in-the-middle">Lost in the middle</dt>
+    <dd>The finding (Liu et al., 2024) that models use information near the start or end of a long context more reliably than information buried in the middle. <span class="see">See <a href="chapters/06-context-engineering.html#attention">Ch 06 · Why more context isn't free</a></span></dd>
+  </dl>
+
+  <h2 id="g-m">M</h2>
+  <dl class="gloss">
+    <dt id="term-mast">MAST</dt>
+    <dd>The Multi-Agent System Failure Taxonomy (Cemri et al., 2025), which sorts the ways multi-agent LLM systems fail into 14 failure modes under three categories: specification and system design, inter-agent misalignment, and verification and termination. <span class="see">See <a href="chapters/19-multi-agent-failures.html#mast">Ch 19 · The MAST taxonomy</a></span></dd>
+
+    <dt id="term-mcp">MCP (Model Context Protocol)</dt>
+    <dd>An open protocol, open-sourced by Anthropic in November 2024, through which an application connects to servers that offer tools, readable resources and prompt templates in one standard way. <span class="see">See <a href="chapters/04-tool-use.html#mcp">Ch 04 · MCP: tools as a shared protocol</a></span></dd>
+
+    <dt id="term-memgpt">MemGPT</dt>
+    <dd>A system (Packer et al., 2023) that treats the context window like an operating system's main memory, with the model calling functions to move information between it and external storage. <span class="see">See <a href="chapters/07-memory.html">Ch 07 · Memory systems</a></span></dd>
+
+    <dt id="term-mesh">Mesh</dt>
+    <dd>A decentralized topology in which agents talk directly to their peers, with no central coordinator deciding who acts next. <span class="see">See <a href="chapters/15-topologies.html#decentralized">Ch 15 · Decentralized: mesh and handoff</a></span></dd>
+
+    <dt id="term-model-proposes">Model proposes, harness disposes</dt>
+    <dd>The rule that anything the model outputs, such as a tool call or a plan, is only a proposal, and the harness's code checks it against schemas, permissions and budgets before deciding whether it happens. <span class="see">See <a href="chapters/08-agent-harness.html#disposes">Ch 08 · The model proposes, the harness disposes</a></span></dd>
+  </dl>
+
+  <h2 id="g-n">N</h2>
+  <dl class="gloss">
+    <dt id="term-non-determinism">Non-determinism</dt>
+    <dd>The fact that the same input can give different outputs from run to run (because of sampling, batching effects and model updates), so a single successful run proves very little. <span class="see">See <a href="chapters/01-llm-as-a-component.html#nondeterminism">Ch 01 · Non-determinism</a></span></dd>
+  </dl>
+
+  <h2 id="g-o">O</h2>
+  <dl class="gloss">
+    <dt id="term-orchestrator-worker">Orchestrator-worker</dt>
+    <dd>A pattern in which a central orchestrator LLM breaks a task into subtasks at run time, hands them to worker LLMs or agents, and combines their results. <span class="see">See <a href="chapters/15-topologies.html#centralized">Ch 15 · Centralized: orchestrator-worker and hierarchy</a></span></dd>
+  </dl>
+
+  <h2 id="g-p">P</h2>
+  <dl class="gloss">
+    <dt id="term-parallelization">Parallelization (sectioning, voting)</dt>
+    <dd>A workflow pattern that runs several LLM calls at once: in sectioning each call handles a different, independent part of the task, and in voting each call attempts the same task so the answers can be compared. <span class="see">See <a href="chapters/02-workflows-vs-agents.html#patterns">Ch 02 · Five workflow patterns</a></span></dd>
+
+    <dt id="term-pass-at-k">pass@k</dt>
+    <dd>The probability that at least one of k attempts at a task succeeds, which measures whether an agent can solve the task at all. <span class="see">See <a href="chapters/13-observability-and-evals.html#pass-k">Ch 13 · pass@k vs pass^k</a></span></dd>
+
+    <dt id="term-pass-hat-k">pass^k</dt>
+    <dd>The probability that all k attempts at a task succeed, which measures whether an agent solves it reliably every time, and falls fast as k grows. <span class="see">See <a href="chapters/13-observability-and-evals.html#pass-k">Ch 13 · pass@k vs pass^k</a></span></dd>
+
+    <dt id="term-plan-and-execute">Plan-and-execute</dt>
+    <dd>A pattern in which a planner first writes an explicit multi-step plan and an executor then carries out the steps, so code can check, budget or show the plan to a person before anything runs. <span class="see">See <a href="chapters/05-reasoning-and-planning.html#plan-execute">Ch 05 · Plan-and-execute</a></span></dd>
+
+    <dt id="term-procedural-memory">Procedural memory</dt>
+    <dd>Knowledge of how to do things, held in the model's weights and in the agent's own code, prompts and tool definitions. <span class="see">See <a href="chapters/07-memory.html">Ch 07 · Memory systems</a></span></dd>
+
+    <dt id="term-prompt-caching">Prompt caching</dt>
+    <dd>A provider feature that reuses the processed form of a prompt prefix it has seen recently, so a call that starts with exactly the same prefix is faster and cheaper; any change early in the prompt invalidates the cache for everything after it. <span class="see">See <a href="chapters/06-context-engineering.html#cache-order">Ch 06 · Ordering and the prompt-cache prefix</a></span></dd>
+
+    <dt id="term-prompt-chaining">Prompt chaining</dt>
+    <dd>A workflow pattern that splits a task into fixed steps run in sequence, each LLM call working on the previous one's output, often with code checks (gates) in between. <span class="see">See <a href="chapters/02-workflows-vs-agents.html#patterns">Ch 02 · Five workflow patterns</a></span></dd>
+
+    <dt id="term-prompt-injection">Prompt injection</dt>
+    <dd>An attack in which text the model reads contains instructions that override what the developer or user intended; it remains unsolved because the model can't reliably tell instructions from data. <span class="see">See <a href="chapters/12-security.html#injection">Ch 12 · Prompt injection: direct and indirect</a></span></dd>
+  </dl>
+
+  <h2 id="g-r">R</h2>
+  <dl class="gloss">
+    <dt id="term-react">ReAct</dt>
+    <dd>“Reason + Act” (Yao et al., 2022), a pattern in which the model alternates between a thought, an action such as a tool call, and an observation of the result, so facts from the world feed each next thought. <span class="see">See <a href="chapters/05-reasoning-and-planning.html#react">Ch 05 · ReAct</a></span></dd>
+
+    <dt id="term-reducer">Reducer</dt>
+    <dd>A function that combines a node's update with the existing state (for example, appending to a list instead of overwriting it), so that updates from nodes running in parallel don't overwrite each other. <span class="see">See <a href="chapters/09-control-flow-and-state.html#reducers">Ch 09 · State and reducers</a></span></dd>
+
+    <dt id="term-reflexion">Reflexion</dt>
+    <dd>A pattern (Shinn et al., 2023) in which, after a failed attempt, the agent writes a short reflection on what went wrong and keeps it in memory to guide its next attempt. <span class="see">See <a href="chapters/05-reasoning-and-planning.html#reflection">Ch 05 · Self-Refine and Reflexion</a></span></dd>
+
+    <dt id="term-rewoo">ReWOO</dt>
+    <dd>“Reasoning WithOut Observation” (Xu et al., 2023), a pattern in which a planner writes the whole tool chain up front with placeholders for results it hasn't seen, workers fill them in, and a solver writes the answer, avoiding a model call after every tool result. <span class="see">See <a href="chapters/05-reasoning-and-planning.html#rewoo">Ch 05 · ReWOO and LLMCompiler</a></span></dd>
+
+    <dt id="term-routing">Routing</dt>
+    <dd>A workflow pattern in which a classifier (an LLM call or plain code) sorts an input into a category and sends it to a prompt, model or handler specialized for that category. <span class="see">See <a href="chapters/02-workflows-vs-agents.html#patterns">Ch 02 · Five workflow patterns</a></span></dd>
+  </dl>
+
+  <h2 id="g-s">S</h2>
+  <dl class="gloss">
+    <dt id="term-sandbox">Sandbox</dt>
+    <dd>An isolated environment, such as a container with restricted file, network and system access, where agent-run code and tools execute so that mistakes or attacks can't reach the host. <span class="see">See <a href="chapters/12-security.html#sandboxing">Ch 12 · Sandboxing and egress control</a></span></dd>
+
+    <dt id="term-self-consistency">Self-consistency</dt>
+    <dd>Sampling several independent chain-of-thought answers to the same question and taking the most common final answer (Wang et al., 2023). <span class="see">See <a href="chapters/05-reasoning-and-planning.html#cot">Ch 05 · Chain-of-thought and self-consistency</a></span></dd>
+
+    <dt id="term-semantic-memory">Semantic memory</dt>
+    <dd>Memory of general facts, such as a user's preferences or how a codebase is laid out, kept apart from the particular episodes they were learned in. <span class="see">See <a href="chapters/07-memory.html">Ch 07 · Memory systems</a></span></dd>
+
+    <dt id="term-semaphore">Semaphore</dt>
+    <dd>A concurrency primitive that lets at most N tasks into a section of code at once, used for example to cap how many model calls are in flight. <span class="see">See <a href="chapters/10-concurrency.html">Ch 10 · Concurrency for agents</a></span></dd>
+
+    <dt id="term-span">Span</dt>
+    <dd>One timed unit of work inside a <a href="#term-trace">trace</a>, such as an agent's whole lifetime, one model call or one tool call, with a start, an end, attributes and a link to its parent span. <span class="see">See <a href="chapters/13-observability-and-evals.html#spans">Ch 13 · Traces and the span model</a></span></dd>
+
+    <dt id="term-spawn">Spawn</dt>
+    <dd>Creating a new child agent at run time with its own task, context and limits, which a harness handles as a lifecycle: propose, validate, create, register, schedule, run, return, aggregate. <span class="see">See <a href="chapters/16-spawning-and-delegation.html#lifecycle">Ch 16 · The spawn lifecycle</a></span></dd>
+
+    <dt id="term-state-machine">State machine</dt>
+    <dd>A model of a process as a fixed set of named states (such as running or done), with explicit rules for which event moves it from one state to another; any transition not listed is illegal. <span class="see">See <a href="chapters/09-control-flow-and-state.html#lifecycle">Ch 09 · The agent lifecycle as a state machine</a></span></dd>
+
+    <dt id="term-stigmergy">Stigmergy</dt>
+    <dd>Coordination through changes left in a shared environment rather than direct messages, as when ants follow pheromone trails laid by other ants; the term was coined by Pierre-Paul Grassé in 1959. <span class="see">See <a href="chapters/18-swarm-intelligence.html#aco">Ch 18 · Ant colonies and stigmergy</a></span></dd>
+
+    <dt id="term-stop-reason"><code>stop_reason</code></dt>
+    <dd>The field in a model response that says why generation stopped (for example <code>end_turn</code>, <code>tool_use</code> or <code>max_tokens</code>), and so the first branch an agent loop takes. <span class="see">See <a href="chapters/01-llm-as-a-component.html#stop-reason">Ch 01 · stop_reason</a></span></dd>
+
+    <dt id="term-structured-concurrency">Structured concurrency</dt>
+    <dd>A discipline in which concurrent tasks are started inside a scope that can't exit until all of them have finished or been cancelled, so no task outlives the code that started it. <span class="see">See <a href="chapters/10-concurrency.html">Ch 10 · Concurrency for agents</a></span></dd>
+
+    <dt id="term-structured-output">Structured output</dt>
+    <dd>Model output constrained to a machine-readable format, such as JSON that matches a schema; even when the format is guaranteed, the content still has to be validated. <span class="see">See <a href="chapters/01-llm-as-a-component.html#structured">Ch 01 · Structured output is a proposal, not a fact</a></span></dd>
+
+    <dt id="term-subagent">Subagent</dt>
+    <dd>An agent started by another agent to handle a subtask in its own fresh context and return a condensed result, usually exposed to the parent as just another tool. <span class="see">See <a href="chapters/16-spawning-and-delegation.html#as-tool">Ch 16 · Subagent as a tool</a></span></dd>
+
+    <dt id="term-swarm">Swarm</dt>
+    <dd>A loosely used name for many agents working with little or no central control, which in LLM work can mean handoff networks (as in OpenAI's experimental Swarm framework), simulated agent societies, or groups of agents that debate. <span class="see">See <a href="chapters/18-swarm-intelligence.html#llm-swarms">Ch 18 · What “swarm” means in LLM systems</a></span></dd>
+  </dl>
+
+  <h2 id="g-t">T</h2>
+  <dl class="gloss">
+    <dt id="term-taskgroup"><code>TaskGroup</code></dt>
+    <dd>Python's <code>asyncio.TaskGroup</code> (added in 3.11), which runs a set of tasks inside an <code>async with</code> block, waits for all of them at the end, and cancels the rest if one fails. <span class="see">See <a href="chapters/10-concurrency.html">Ch 10 · Concurrency for agents</a></span></dd>
+
+    <dt id="term-telephone-game">Telephone game</dt>
+    <dd>The loss and distortion of information as tasks and findings are summarized and passed from agent to agent through a delegation tree, named after the children's game. <span class="see">See <a href="chapters/16-spawning-and-delegation.html#context-passing">Ch 16 · Context passing and the telephone game</a></span></dd>
+
+    <dt id="term-timeout">Timeout</dt>
+    <dd>A limit on how long an operation may take before it is abandoned, needed at every level, from a single model or tool call up to the whole run. <span class="see">See <a href="chapters/11-reliability.html#timeouts">Ch 11 · Timeouts at every level</a></span></dd>
+
+    <dt id="term-token">Token</dt>
+    <dd>The unit of text a model reads and writes, usually a piece of a word (roughly three-quarters of an English word on average, depending on the tokenizer); context limits and prices are counted in tokens. <span class="see">See <a href="chapters/01-llm-as-a-component.html#generation">Ch 01 · Tokens and the generation loop</a></span></dd>
+
+    <dt id="term-tool">Tool</dt>
+    <dd>A function the harness offers the model, described by a name, a plain-language description and a JSON Schema for its inputs; the model can ask for it to be called, and the harness runs it. <span class="see">See <a href="chapters/04-tool-use.html#definition">Ch 04 · Anatomy of a tool definition</a></span></dd>
+
+    <dt id="term-tool-result"><code>tool_result</code></dt>
+    <dd>The content block the harness sends back in the next user message, carrying a tool's output (or its error) and matched to the request by its <a href="#term-tool-use-id"><code>tool_use_id</code></a>. <span class="see">See <a href="chapters/04-tool-use.html#protocol">Ch 04 · The protocol</a></span></dd>
+
+    <dt id="term-tool-use"><code>tool_use</code></dt>
+    <dd>The content block a model emits when it wants a tool run, holding a unique id, the tool's name and its input arguments; the response's <code>stop_reason</code> is then <code>tool_use</code> too. <span class="see">See <a href="chapters/04-tool-use.html#protocol">Ch 04 · The protocol</a></span></dd>
+
+    <dt id="term-tool-use-id"><code>tool_use_id</code></dt>
+    <dd>The id that pairs each <code>tool_result</code> with the <code>tool_use</code> block that asked for it; every request needs exactly one matching result, even when several calls run in parallel. <span class="see">See <a href="chapters/04-tool-use.html#protocol">Ch 04 · The protocol</a></span></dd>
+
+    <dt id="term-trace">Trace</dt>
+    <dd>The record of one run, built from <a href="#term-span">spans</a> that share a trace id and nest through parent ids, so you can see which agent did what, when, and at what cost. <span class="see">See <a href="chapters/13-observability-and-evals.html#spans">Ch 13 · Traces and the span model</a></span></dd>
+
+    <dt id="term-trajectory">Trajectory</dt>
+    <dd>The full sequence of observations and actions in one run, in practice the message history; sometimes also called a trace or rollout, and what trajectory evals grade. <span class="see">See <a href="chapters/03-agent-loop.html#anatomy">Ch 03 · Anatomy: the minimum pieces</a></span></dd>
+
+    <dt id="term-tree-of-thoughts">Tree of Thoughts (ToT)</dt>
+    <dd>A pattern (Yao et al., 2023) that treats reasoning as search: the model proposes several possible next steps, judges how promising each is, and the harness explores the best branches and backs out of dead ends. <span class="see">See <a href="chapters/05-reasoning-and-planning.html#search">Ch 05 · Search: Tree of Thoughts and LATS</a></span></dd>
+  </dl>
+
+  <h2 id="g-v">V</h2>
+  <dl class="gloss">
+    <dt id="term-vector-store">Vector store</dt>
+    <dd>A database that stores <a href="#term-embedding">embeddings</a> and returns the entries closest to a query vector, so an agent can retrieve memories or documents by meaning rather than by exact words. <span class="see">See <a href="chapters/07-memory.html">Ch 07 · Memory systems</a></span></dd>
+  </dl>
+
+  <h2 id="g-w">W</h2>
+  <dl class="gloss">
+    <dt id="term-working-memory">Working memory</dt>
+    <dd>The information an agent holds for the decision it is making right now, which for an LLM agent is mostly what is in the context window at that step. <span class="see">See <a href="chapters/07-memory.html">Ch 07 · Memory systems</a></span></dd>
+  </dl>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="chapters/22-interview-bank.html"><small>Previous · Chapter 22</small>Review and interview bank</a>
+    <a class="next" href="index.html"><small>Back to</small>Guide home</a>
+  </nav>
+</main>
+</div>
+</body>
+</html>

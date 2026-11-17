@@ -1,0 +1,791 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Control Flow and State · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="../index.html">Loop <span>→</span> Swarm</a>
+    <div class="crumbs"><a href="../index.html">Guide</a> · Part 3 · The harness · Chapter 09</div>
+    <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+  </div>
+</header>
+
+<div class="page has-toc">
+<main class="chapter">
+  <header class="ch-head">
+    <p class="eyebrow"><b>Part 3 · The harness</b> · Chapter 09 · Level L3</p>
+    <h1>Control flow and state</h1>
+    <p class="lede">At every moment a harness must answer two questions: what runs next, and what is true now. This chapter makes both answers explicit data: a state machine for each agent's lifecycle, a graph for what runs next, reducers for merging updates, checkpoints for pausing and resuming, and an event log that records it all.</p>
+    <ul class="ch-meta">
+      <li><b>50 min</b> reading</li>
+      <li>Builds on: <b>Chapters 03, 08</b></li>
+      <li>Your project: <b>Stages 1, 2, 6</b></li>
+    </ul>
+    <ol class="where" aria-label="Where this chapter sits in the guide">
+      <li class="past"><span>Part 1</span>Foundations</li>
+      <li class="past"><span>Part 2</span>Thinking &amp; memory</li>
+      <li class="here"><span>Part 3</span>The harness</li>
+      <li><span>Part 4</span>Multi-agent</li>
+      <li><span>Part 5</span>Together</li>
+    </ol>
+  </header>
+
+  <details class="toc-mobile"><summary>In this chapter</summary><div data-toc></div></details>
+
+  <div class="box predict">
+    <span class="box-label">Predict first · 10 min</span>
+    <p>Write answers in <code>docs/LEARNING_NOTES.md</code> under “Guide ch09”. Tag each one <em>sure</em> or <em>guess</em>. Don't read on until you're done.</p>
+    <ol>
+      <li>A parent agent has spawned three children, and one child fails. List every status you think the parent could have during this, and the event that moves it out of each one.</li>
+      <li>Two branches run in parallel. Both write to <code>state["notes"]</code>: one writes <code>["a"]</code>, the other <code>["b"]</code>. What does <code>notes</code> contain afterwards? What does your answer depend on?</li>
+      <li>A run crashes at step 7 of 10, just after step 7 sent an email. You restart it. What must be true for the email not to go out twice?</li>
+    </ol>
+  </div>
+
+  <h2 id="big-idea">The big idea</h2>
+  <p>Chapter 08 named the loop driver. This chapter is about what the driver drives. Every harness, at every moment, holds two things: <strong>control</strong> (which piece of work runs next) and <strong>state</strong> (everything the run knows so far).</p>
+  <p>The simplest harness keeps both <em>implicitly</em>. Control is wherever the Python interpreter happens to be in your <code>while</code> loop. State is local variables on the call stack. That works until you need to pause, resume, inspect or test the run. Then you discover it all lives in a process's memory, and dies with it.</p>
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>Make the run a value.</strong> When control and state are explicit data (a status field, a named next step, a state record, a log of events), the run can be saved, inspected, paused, resumed, replayed and tested. When they live only in the call stack, a crash erases them.</p>
+  </div>
+  <p>Each section below makes one more piece explicit. Status becomes a state machine. “What runs next” becomes a graph. “How updates combine” becomes reducers. “Where we were” becomes checkpoints. “What happened” becomes an event log.</p>
+
+  <h2 id="lifecycle" data-short="Lifecycle state machine">The agent lifecycle as a state machine</h2>
+  <p>Start with the smallest explicit thing: one field saying what condition an agent is in. A <strong>finite state machine</strong> turns that field into a contract. Six terms are enough:</p>
+  <dl class="defs">
+    <dt>State</dt><dd>A named condition the agent is in, such as <code>running</code>. Exactly one at a time.</dd>
+    <dt>Event</dt><dd>Something that happened, such as <code>children_done</code>. Events are the only things that change state.</dd>
+    <dt>Transition</dt><dd>A rule: in state X, on event E, move to state Y. Any pair not listed is illegal.</dd>
+    <dt>Guard</dt><dd>An extra condition on a transition, such as “only if the output validated”.</dd>
+    <dt>Terminal state</dt><dd>A state with no way out. A finished agent never starts again; a retry is a new attempt with a new record.</dd>
+    <dt>Invariant</dt><dd>Something always true, for example “every agent ends in exactly one terminal state”.</dd>
+  </dl>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 330" role="img" aria-label="An example agent lifecycle state machine. Non-terminal states: created, queued, running, waiting_on_children and waiting_on_human. Created moves to queued on register, queued to running when a slot is free. Running moves to waiting_on_children when it spawns and back when the children are done, and to waiting_on_human and back when answered. From running: succeeded on a valid final answer, failed on an error, budget_exceeded when a limit is hit. From any non-terminal state: cancelled on cancel.">
+        <defs>
+          <marker id="f0901-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0901-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-group" x="24" y="20" width="456" height="300" rx="10"/>
+        <text class="t-xs t-muted" x="36" y="312">non-terminal states</text>
+        <text class="t-xs t-muted" x="660" y="30" text-anchor="middle">terminal: no way out</text>
+
+        <!-- start -->
+        <circle class="fill-fg" cx="12" cy="170" r="5"/>
+        <line x1="17" y1="170" x2="34" y2="170" marker-end="url(#f0901-ah)"/>
+        <rect x="36" y="152" width="80" height="36" rx="18"/>
+        <text class="t-mono" x="76" y="174" text-anchor="middle">created</text>
+        <line x1="116" y1="170" x2="158" y2="170" marker-end="url(#f0901-ah)"/>
+        <text class="t-xs t-muted" x="138" y="163" text-anchor="middle">register</text>
+        <rect x="160" y="152" width="80" height="36" rx="18"/>
+        <text class="t-mono" x="200" y="174" text-anchor="middle">queued</text>
+        <line x1="240" y1="170" x2="298" y2="170" marker-end="url(#f0901-ah)"/>
+        <text class="t-xs t-muted" x="270" y="163" text-anchor="middle">slot free</text>
+
+        <!-- running -->
+        <rect class="n-accent n-thick" x="300" y="140" width="140" height="60" rx="22"/>
+        <text class="t-mono t-b" x="370" y="174" text-anchor="middle">running</text>
+
+        <!-- waiting on children -->
+        <rect class="n-violet" x="295" y="40" width="150" height="40" rx="20"/>
+        <text class="t-mono" x="370" y="64" text-anchor="middle">waiting_on_children</text>
+        <line x1="345" y1="140" x2="345" y2="82" marker-end="url(#f0901-ah)"/>
+        <text class="t-xs t-muted" x="339" y="114" text-anchor="end">spawned</text>
+        <line x1="395" y1="80" x2="395" y2="138" marker-end="url(#f0901-ah)"/>
+        <text class="t-xs t-muted" x="401" y="114">children done</text>
+
+        <!-- waiting on human -->
+        <rect class="n-violet" x="295" y="260" width="150" height="40" rx="20"/>
+        <text class="t-mono" x="370" y="284" text-anchor="middle">waiting_on_human</text>
+        <line x1="345" y1="200" x2="345" y2="258" marker-end="url(#f0901-ah)"/>
+        <text class="t-xs t-muted" x="339" y="234" text-anchor="end">needs a human</text>
+        <line x1="395" y1="260" x2="395" y2="202" marker-end="url(#f0901-ah)"/>
+        <text class="t-xs t-muted" x="401" y="234">answered</text>
+
+        <!-- terminal states -->
+        <rect class="n-accent n-thick" x="580" y="40" width="160" height="44" rx="8"/>
+        <text class="t-mono t-b" x="660" y="59" text-anchor="middle">succeeded</text>
+        <text class="t-xs t-muted" x="660" y="75" text-anchor="middle">on: valid final answer</text>
+        <rect class="n-red n-thick" x="580" y="110" width="160" height="44" rx="8"/>
+        <text class="t-mono t-b" x="660" y="129" text-anchor="middle">failed</text>
+        <text class="t-xs t-muted" x="660" y="145" text-anchor="middle">on: error, bad output</text>
+        <rect class="n-sunken n-thick" x="580" y="180" width="160" height="44" rx="8"/>
+        <text class="t-mono t-b" x="660" y="199" text-anchor="middle">cancelled</text>
+        <text class="t-xs t-muted" x="660" y="215" text-anchor="middle">on: cancel, from any state</text>
+        <rect class="n-amber n-thick" x="580" y="250" width="160" height="44" rx="8"/>
+        <text class="t-mono t-b" x="660" y="269" text-anchor="middle">budget_exceeded</text>
+        <text class="t-xs t-muted" x="660" y="285" text-anchor="middle">on: limit hit</text>
+
+        <line x1="440" y1="150" x2="578" y2="62" marker-end="url(#f0901-ah)"/>
+        <line x1="440" y1="165" x2="578" y2="132" marker-end="url(#f0901-ah)"/>
+        <line x1="440" y1="190" x2="578" y2="272" marker-end="url(#f0901-ah)"/>
+        <line class="e-dash e-muted" x1="480" y1="202" x2="578" y2="202" marker-end="url(#f0901-ahm)"/>
+        <text class="t-xs t-muted" x="529" y="196" text-anchor="middle">cancel</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 9.1</b>One <em>example</em> lifecycle, not a recommendation. The dashed boundary means “any state inside”: cancellation can arrive while an agent is queued, running or waiting. The terminal states on the right have thick borders and no outgoing arrows. Each one records <em>why</em> the agent ended.</figcaption>
+  </figure>
+
+  <p>In code, a state machine is a lookup table plus one function that refuses everything the table doesn't allow. The table is the whole design, and it fits on one screen.</p>
+  <p class="code-label">A transition table and the only function allowed to change status</p>
+<pre><code>TRANSITIONS = {                                    <span class="c"># (state, event) -> next state</span>
+    (<span class="s">"created"</span>, <span class="s">"registered"</span>):              <span class="s">"queued"</span>,
+    (<span class="s">"queued"</span>, <span class="s">"slot_free"</span>):                <span class="s">"running"</span>,
+    (<span class="s">"running"</span>, <span class="s">"spawned_children"</span>):        <span class="s">"waiting_on_children"</span>,
+    (<span class="s">"waiting_on_children"</span>, <span class="s">"children_done"</span>): <span class="s">"running"</span>,
+    (<span class="s">"running"</span>, <span class="s">"needs_human"</span>):             <span class="s">"waiting_on_human"</span>,
+    (<span class="s">"waiting_on_human"</span>, <span class="s">"answered"</span>):       <span class="s">"running"</span>,
+    (<span class="s">"running"</span>, <span class="s">"final_valid"</span>):             <span class="s">"succeeded"</span>,
+    (<span class="s">"running"</span>, <span class="s">"error"</span>):                   <span class="s">"failed"</span>,
+    (<span class="s">"running"</span>, <span class="s">"limit_hit"</span>):               <span class="s">"budget_exceeded"</span>,
+}
+TERMINAL = {<span class="s">"succeeded"</span>, <span class="s">"failed"</span>, <span class="s">"cancelled"</span>, <span class="s">"budget_exceeded"</span>}
+
+<span class="k">def</span> transition(agent, event):
+    <span class="k">if</span> agent.status <span class="k">in</span> TERMINAL:
+        <span class="k">raise</span> IllegalTransition(<span class="s">f"{agent.id} already {agent.status}"</span>)
+    <span class="k">if</span> event == <span class="s">"cancel"</span>:
+        new = <span class="s">"cancelled"</span>                           <span class="c"># legal from any non-terminal state</span>
+    <span class="k">else</span>:
+        new = TRANSITIONS.get((agent.status, event))
+        <span class="k">if</span> new <span class="k">is None</span>:
+            <span class="k">raise</span> IllegalTransition(<span class="s">f"{event} not allowed in {agent.status}"</span>)
+    tracer.emit(<span class="s">"transition"</span>, agent_id=agent.id, old=agent.status, new=new, on=event)
+    agent.status = new</code></pre>
+  <p>Two details carry most of the value. First, an illegal transition <em>raises</em>. That's a bug in your harness, not a failure of the agent, so it should crash loudly in tests rather than turn into a Result. Second, every transition is traced. If the tracer records each <code>(old, new, event)</code>, you can rebuild any agent's whole life from the log, which is where this chapter ends.</p>
+  <p>When a flat machine grows too many states, David Harel's <strong>statecharts</strong> (1987) add nesting. <code>running</code> can contain sub-states such as <code>thinking</code> and <code>acting</code>, and one “cancel” arrow on the outer state covers all of them. That's the idea behind the dashed boundary in Figure 9.1.</p>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness · this is an example</span>
+    <p>Figure 9.1 is one possible lifecycle. Yours is a design decision. Work through these before you write your Stage 1 status field:</p>
+    <ul>
+      <li>Does Stage 1 need <code>queued</code> at all, before Stage 3 adds a concurrency limit? What would you lose by adding it later?</li>
+      <li>Is <code>budget_exceeded</code> its own terminal state, or <code>failed</code> with a reason field? What does each choice make easier when you count outcomes in Stage 6?</li>
+      <li>A parent in <code>waiting_on_children</code> gets one failed child. Does it go back to <code>running</code> to read that failed Result, or straight to <code>failed</code>? Your spec's principle 2.8 points one way.</li>
+      <li>A parent is cancelled while its children run. Which state are the children in while their cancellation is still in progress? Do you need a state for that?</li>
+    </ul>
+  </div>
+
+  <h2 id="explicit" data-short="Explicit vs implicit">Explicit vs implicit control flow</h2>
+  <p>A state machine says what condition an agent is in. Control flow says what <em>work</em> runs next. There are two places that decision can live.</p>
+  <p>In <strong>implicit</strong> control flow, the next step is whatever the model asks for. The agent loop from Chapter 03 is the purest case: call the model, do what it requested, repeat until it stops. The program never names the steps in advance. You only learn the path by running it.</p>
+  <p>In <strong>explicit</strong> control flow, the program declares the possible steps and the paths between them before anything runs. A model may still choose <em>which</em> path to take at a branch, but only among paths the program declared.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 280" role="img" aria-label="Left, implicit control flow: a loop between call model and do what it asked, which ends when the model says end_turn. The path is known only after the run. Right, explicit control flow: a graph of plan, act and check nodes, with a retry edge from check back to act and a done edge from check to END. It can be drawn before it runs.">
+        <defs>
+          <marker id="f0902-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0902-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <line class="e-muted" x1="360" y1="16" x2="360" y2="264"/>
+        <!-- implicit -->
+        <text class="t-b" x="180" y="30" text-anchor="middle">implicit</text>
+        <text class="t-sm t-muted" x="180" y="48" text-anchor="middle">the model picks each next step</text>
+        <rect class="n-accent" x="110" y="80" width="140" height="40" rx="6"/>
+        <text class="t-b" x="180" y="105" text-anchor="middle">call model</text>
+        <rect x="110" y="180" width="140" height="40" rx="6"/>
+        <text class="t-b" x="180" y="205" text-anchor="middle">do what it asked</text>
+        <line x1="160" y1="120" x2="160" y2="178" marker-end="url(#f0902-ah)"/>
+        <text class="t-xs t-muted" x="154" y="153" text-anchor="end">tool_use</text>
+        <line x1="200" y1="180" x2="200" y2="122" marker-end="url(#f0902-ah)"/>
+        <text class="t-xs t-muted" x="206" y="153">result</text>
+        <line class="e-accent" x1="250" y1="100" x2="312" y2="100" marker-end="url(#f0902-aha)"/>
+        <text class="t-xs t-accent" x="281" y="93" text-anchor="middle">end_turn</text>
+        <circle cx="326" cy="100" r="12"/>
+        <text class="t-xs" x="326" y="104" text-anchor="middle">end</text>
+        <text class="t-sm t-muted" x="180" y="252" text-anchor="middle">path known only after the run</text>
+
+        <!-- explicit -->
+        <text class="t-b" x="540" y="30" text-anchor="middle">explicit</text>
+        <text class="t-sm t-muted" x="540" y="48" text-anchor="middle">the program declares every edge</text>
+        <rect x="400" y="80" width="80" height="36" rx="6"/>
+        <text class="t-b" x="440" y="103" text-anchor="middle">plan</text>
+        <rect x="500" y="80" width="80" height="36" rx="6"/>
+        <text class="t-b" x="540" y="103" text-anchor="middle">act</text>
+        <rect x="600" y="80" width="80" height="36" rx="6"/>
+        <text class="t-b" x="640" y="103" text-anchor="middle">check</text>
+        <line x1="480" y1="98" x2="498" y2="98" marker-end="url(#f0902-ah)"/>
+        <line x1="580" y1="98" x2="598" y2="98" marker-end="url(#f0902-ah)"/>
+        <path d="M620,116 V150 H540 V118" marker-end="url(#f0902-ah)"/>
+        <text class="t-xs t-muted" x="580" y="166" text-anchor="middle">retry</text>
+        <line class="e-accent" x1="660" y1="116" x2="660" y2="184" marker-end="url(#f0902-aha)"/>
+        <text class="t-xs t-accent" x="666" y="152">done</text>
+        <circle cx="660" cy="200" r="14"/>
+        <text class="t-xs" x="660" y="204" text-anchor="middle">END</text>
+        <text class="t-sm t-muted" x="540" y="252" text-anchor="middle">you can draw it before it runs</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 9.2</b>Where “what next?” is decided. On the left, the decision is in the model's output, step by step. On the right, it's in a graph the program declared. The right-hand version can still use a model to choose between “retry” and “done”, but it can't invent a third path.</figcaption>
+  </figure>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th></th><th>Implicit (model-driven loop)</th><th>Explicit (declared graph)</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Who picks the next step</strong></td><td>The model, every step</td><td>The program, sometimes asking a model to pick among declared edges</td></tr>
+        <tr><td><strong>Handles surprises</strong></td><td>Well: it can take any path the tools allow</td><td>Only along paths you foresaw</td></tr>
+        <tr><td><strong>Testing</strong></td><td>Hard: the path changes run to run</td><td>Each node and each edge can be tested alone</td></tr>
+        <tr><td><strong>Pause and resume</strong></td><td>You have to invent a place to stop</td><td>Natural: save the state and the name of the next node</td></tr>
+        <tr><td><strong>Typical failure</strong></td><td>Wanders, loops, stops early</td><td>Rigid: the task needed a path you didn't draw</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>This is Chapter 02's workflows-versus-agents distinction, seen from the harness side. Real systems mix them. Your swarm harness is a good example. <em>Which</em> children get spawned is implicit: the planner decides. But <em>how</em> each agent moves through its life is explicit: Figure 9.1, or whatever you design instead. Getting that split right is most of the design work.</p>
+
+  <h2 id="graphs">Graphs: nodes, edges, conditional edges</h2>
+  <p>A graph is the standard way to write explicit control flow down. It needs only three ideas:</p>
+  <dl class="defs">
+    <dt>Node</dt><dd>A unit of work: a function that reads the state and returns an <em>update</em> to it. A node can call a model, run a tool, or do plain computation.</dd>
+    <dt>Edge</dt><dd>A fixed rule: after node A, run node B.</dd>
+    <dt>Conditional edge</dt><dd>A function of the state that returns the <em>name</em> of the next node. This is where branching and looping live.</dd>
+  </dl>
+  <p>Cycles are allowed, and they matter. A graph with no cycles is a pipeline. The cycle (check, then back to act) is what lets a graph behave like an agent while staying inspectable.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 310" role="img" aria-label="A graph with a conditional edge. Start leads to plan, then act, then check, then a route decision. Route has four exits: continue goes back to act, replan goes back to plan, done goes to END, and over limit goes to a stop node. Below, a shared state record is read by every node and updated through reducers.">
+        <defs>
+          <marker id="f0903-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0903-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0903-ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-red" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0903-ahv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-violet" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <circle class="fill-fg" cx="30" cy="120" r="7"/>
+        <text class="t-xs t-muted" x="30" y="145" text-anchor="middle">start</text>
+        <line x1="37" y1="120" x2="68" y2="120" marker-end="url(#f0903-ah)"/>
+
+        <rect x="70" y="96" width="100" height="48" rx="6"/>
+        <text class="t-b" x="120" y="116" text-anchor="middle">plan</text>
+        <text class="t-xs t-muted" x="120" y="133" text-anchor="middle">state → update</text>
+        <rect x="230" y="96" width="100" height="48" rx="6"/>
+        <text class="t-b" x="280" y="116" text-anchor="middle">act</text>
+        <text class="t-xs t-muted" x="280" y="133" text-anchor="middle">state → update</text>
+        <rect x="390" y="96" width="100" height="48" rx="6"/>
+        <text class="t-b" x="440" y="116" text-anchor="middle">check</text>
+        <text class="t-xs t-muted" x="440" y="133" text-anchor="middle">sets verdict</text>
+        <line x1="170" y1="120" x2="228" y2="120" marker-end="url(#f0903-ah)"/>
+        <line x1="330" y1="120" x2="388" y2="120" marker-end="url(#f0903-ah)"/>
+        <line x1="490" y1="120" x2="534" y2="120" marker-end="url(#f0903-ah)"/>
+
+        <!-- router diamond -->
+        <polygon class="n-violet" points="580,82 624,120 580,158 536,120"/>
+        <text class="t-sm t-b" x="580" y="124" text-anchor="middle">route</text>
+
+        <!-- continue -->
+        <path class="e-violet" d="M580,82 V50 H280 V94" marker-end="url(#f0903-ahv)"/>
+        <text class="t-xs t-violet" x="430" y="44" text-anchor="middle">continue</text>
+        <!-- replan -->
+        <path class="e-violet" d="M580,158 V200 H120 V146" marker-end="url(#f0903-ahv)"/>
+        <text class="t-xs t-violet" x="350" y="214" text-anchor="middle">replan</text>
+        <!-- done -->
+        <line class="e-accent" x1="624" y1="120" x2="684" y2="94" marker-end="url(#f0903-aha)"/>
+        <text class="t-xs t-accent" x="646" y="98" text-anchor="end">done</text>
+        <circle cx="700" cy="88" r="16"/>
+        <text class="t-xs" x="700" y="92" text-anchor="middle">END</text>
+        <!-- over limit -->
+        <line class="e-red" x1="624" y1="120" x2="668" y2="160" marker-end="url(#f0903-ahr)"/>
+        <text class="t-xs t-red" x="640" y="164" text-anchor="end">over limit</text>
+        <rect class="n-red" x="670" y="152" width="78" height="34" rx="6"/>
+        <text class="t-sm t-b" x="709" y="173" text-anchor="middle">stop</text>
+
+        <!-- state -->
+        <rect class="n-sunken" x="70" y="246" width="620" height="44" rx="6"/>
+        <text class="t-sm t-b" x="86" y="273">state</text>
+        <text class="t-sm t-mono" x="134" y="273">task · plan · step · verdict · budget_left · notes[]</text>
+        <text class="t-xs t-muted" x="690" y="240" text-anchor="end">read by every node, changed only through reducers</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 9.3</b>A graph with one conditional edge. The violet diamond is a routing function: it reads the state and returns one of four declared names. It can be plain code, or a model call whose answer is checked against those four names. Nodes never call each other; they only return updates.</figcaption>
+  </figure>
+
+  <p>Declaring the graph and running it are separate. Here is the declaration, then a runner that can execute any graph declared this way.</p>
+  <p class="code-label">Declaring the graph in Figure 9.3</p>
+<pre><code>g = Graph()
+g.add_node(<span class="s">"plan"</span>, plan)                    <span class="c"># each node: state -> partial update</span>
+g.add_node(<span class="s">"act"</span>, act)
+g.add_node(<span class="s">"check"</span>, check)
+g.add_edge(<span class="s">"plan"</span>, <span class="s">"act"</span>)
+g.add_edge(<span class="s">"act"</span>, <span class="s">"check"</span>)
+g.add_conditional_edge(<span class="s">"check"</span>, route, allowed={<span class="s">"act"</span>, <span class="s">"plan"</span>, END, STOP})
+
+<span class="k">def</span> route(state):
+    <span class="k">if</span> state[<span class="s">"budget_left"</span>] &lt;= <span class="n">0</span>:    <span class="k">return</span> STOP
+    <span class="k">if</span> state[<span class="s">"verdict"</span>] == <span class="s">"done"</span>:   <span class="k">return</span> END
+    <span class="k">if</span> state[<span class="s">"verdict"</span>] == <span class="s">"replan"</span>: <span class="k">return</span> <span class="s">"plan"</span>
+    <span class="k">return</span> <span class="s">"act"</span></code></pre>
+
+  <p class="code-label">A runner for any such graph</p>
+<pre><code><span class="k">def</span> run_graph(g, state, start=<span class="s">"plan"</span>, max_steps=<span class="n">50</span>):
+    node = start
+    <span class="k">for</span> step <span class="k">in</span> range(max_steps):
+        <span class="k">if</span> node <span class="k">in</span> (END, STOP):
+            <span class="k">return</span> state, node
+        update = g.nodes[node](state)              <span class="c"># run one node</span>
+        state = apply_update(state, update)        <span class="c"># reducers decide how to merge</span>
+        nxt = g.next(node, state)                  <span class="c"># fixed edge or conditional edge</span>
+        <span class="k">if</span> nxt <span class="k">not in</span> g.allowed_after(node):
+            <span class="k">raise</span> BadRoute(node, nxt)                <span class="c"># the router invented a path</span>
+        save_checkpoint(state, next_node=nxt, step=step)
+        node = nxt
+    <span class="k">return</span> state, STOP                             <span class="c"># step limit: a stop, not a hang</span></code></pre>
+  <p>Look at what the runner checks. If the router is a model call, its answer is a proposal, and <code>allowed_after</code> disposes of it, exactly as in Chapter 08. The runner also saves a checkpoint after every node, and it stops at <code>max_steps</code> even if every router keeps saying “continue”.</p>
+  <p>LangGraph formalizes exactly this abstraction: a state schema, nodes that return partial updates, fixed and conditional edges, reducers on state keys, and a checkpointer. Once you've written the 20 lines above yourself, its documentation reads as a description of choices you've already met.</p>
+
+  <h2 id="reducers">State and reducers</h2>
+  <p>In the runner, a node returns an <em>update</em>, not a whole new state. Something has to combine the update with the existing state. With one node at a time, “overwrite each key” almost works. With nodes running in parallel, it fails badly. A <strong>reducer</strong> is the rule, declared per key, for combining an old value with a new one.</p>
+
+  <h3>A worked merge</h3>
+  <p>Two branches, A and B, start from the same state and run in parallel. B finishes first, then A.</p>
+  <div class="cols-3">
+    <div class="card"><p><strong>Start state</strong></p><p><code>notes = ["plan"]</code><br><code>tokens_used = 1000</code><br><code>verdict = None</code></p></div>
+    <div class="card"><p><strong>Branch A returns</strong></p><p><code>notes: ["fact A"]</code><br><code>tokens_used: +400</code><br><code>verdict: "needs_more"</code></p></div>
+    <div class="card"><p><strong>Branch B returns</strong></p><p><code>notes: ["fact B"]</code><br><code>tokens_used: +700</code><br><code>verdict: "done"</code></p></div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Key</th><th>Overwrite (last writer wins)</th><th>Declared reducer</th></tr></thead>
+      <tbody>
+        <tr><td><code>notes</code></td><td><code>["fact A"]</code>. B's note and the plan are both lost.</td><td>append: <code>["plan", "fact A", "fact B"]</code></td></tr>
+        <tr><td><code>tokens_used</code></td><td><code>400</code>. The run now under-reports by 1,700 tokens.</td><td>add: 1000 + 400 + 700 = <code>2100</code></td></tr>
+        <tr><td><code>verdict</code></td><td><code>"needs_more"</code>, only because A happened to finish last</td><td>No safe default. You must declare a rule: raise on conflict, or “done only if every branch says done”.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Every overwrite result depends on which branch finished last, which is timing, which is luck. The bug won't show up in a test that runs branches one at a time. It will show up in production, intermittently.</p>
+  <p class="code-label">Reducers per key, applied in a fixed order</p>
+<pre><code><span class="k">def</span> append(old, new):    <span class="k">return</span> old + new
+<span class="k">def</span> add(old, new):       <span class="k">return</span> old + new      <span class="c"># only correct if updates are deltas</span>
+<span class="k">def</span> overwrite(old, new): <span class="k">return</span> new
+
+REDUCERS = {<span class="s">"notes"</span>: append, <span class="s">"tokens_used"</span>: add}   <span class="c"># verdict: needs its own rule</span>
+
+<span class="k">def</span> apply_updates(state, updates):
+    out = dict(state)
+    <span class="k">for</span> u <span class="k">in</span> sorted(updates, key=<span class="k">lambda</span> u: u.branch):   <span class="c"># branch order, not finish order</span>
+        <span class="k">for</span> key, value <span class="k">in</span> u.values.items():
+            out[key] = REDUCERS.get(key, overwrite)(out[key], value)
+    <span class="k">return</span> out</code></pre>
+  <p>Two rules hide in those lines.</p>
+  <ul>
+    <li><strong>The reducer and the update must mean the same thing.</strong> If A reports its <em>total</em> (1,400) instead of its <em>delta</em> (+400), the add reducer gives 1000 + 1400 + 1700 = 4,100, which is wrong in a new way. Decide once whether updates are deltas or absolutes, per key, and write it down.</li>
+    <li><strong>Apply in a fixed order.</strong> Sorting by branch, not by finish time, makes the merged list identical on every run and every replay. Without it, <code>notes</code> comes out in a different order each time.</li>
+  </ul>
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>A parent aggregating its children's Results is running a reducer.</strong> Every question above applies to your swarm: what each child contributes, in what order it's merged, and what a failed child adds. A child's spending is a delta charged to a shared total, which is the <code>tokens_used</code> row exactly.</p>
+  </div>
+
+  <h2 id="checkpoints" data-short="Checkpoints and replay">Checkpoints, resume, replay and fork</h2>
+  <p>A <strong>checkpoint</strong> is a saved copy of the state plus the name of the next step, keyed by run and step number. The runner above saves one after every node. That one line buys four abilities:</p>
+  <ul>
+    <li><strong>Resume:</strong> after a crash, load the latest checkpoint and continue.</li>
+    <li><strong>Inspect:</strong> answer “what did the state look like at step 3?” without guessing.</li>
+    <li><strong>Fork:</strong> load step 2, change something, and run on from there as a new branch, keeping the original.</li>
+    <li><strong>Replay:</strong> re-run steps to reproduce a bug exactly.</li>
+  </ul>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 290" role="img" aria-label="Timeline of one run with a checkpoint after each step, s0 to s5, then a crash during step 6. Resume loads s5 and continues with s6 and s7. Fork loads s2, edits the state, and runs a new branch s3 prime and s4 prime while keeping the original. A bracket over s0 to s4 shows replay with recorded outputs, giving the same states without model calls.">
+        <defs>
+          <marker id="f0904-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0904-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-amber" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-xs t-muted" x="744" y="20" text-anchor="end">● = checkpoint saved after that step</text>
+        <!-- replay bracket -->
+        <text class="t-xs t-violet" x="280" y="36" text-anchor="middle">replay s0–s4 with recorded outputs: same states, no model calls</text>
+        <line class="e-violet" x1="120" y1="46" x2="440" y2="46"/>
+        <line class="e-violet" x1="120" y1="42" x2="120" y2="52"/>
+        <line class="e-violet" x1="440" y1="42" x2="440" y2="52"/>
+
+        <!-- original -->
+        <text class="t-sm t-b" x="16" y="94">original</text>
+        <line x1="120" y1="90" x2="590" y2="90"/>
+        <circle class="n-accent" cx="120" cy="90" r="9"/><text class="t-xs" x="120" y="114" text-anchor="middle">s0</text>
+        <circle class="n-accent" cx="200" cy="90" r="9"/><text class="t-xs" x="200" y="114" text-anchor="middle">s1</text>
+        <circle class="n-accent" cx="280" cy="90" r="9"/><text class="t-xs" x="280" y="114" text-anchor="middle">s2</text>
+        <circle class="n-accent" cx="360" cy="90" r="9"/><text class="t-xs" x="360" y="114" text-anchor="middle">s3</text>
+        <circle class="n-accent" cx="440" cy="90" r="9"/><text class="t-xs" x="440" y="114" text-anchor="middle">s4</text>
+        <circle class="n-accent" cx="520" cy="90" r="9"/><text class="t-xs" x="520" y="114" text-anchor="middle">s5</text>
+        <text class="t-lg t-b t-red" x="600" y="96" text-anchor="middle">✗</text>
+        <text class="t-xs t-red" x="600" y="114" text-anchor="middle">crash in step 6</text>
+
+        <!-- resume -->
+        <text class="t-sm t-b" x="16" y="174">resume</text>
+        <path class="e-accent" d="M520,120 V159" marker-end="url(#f0904-aha)"/>
+        <text class="t-xs t-accent" x="528" y="144">load s5</text>
+        <line class="e-accent" x1="520" y1="170" x2="680" y2="170"/>
+        <circle class="n-ghost" cx="520" cy="170" r="9"/>
+        <circle class="n-accent" cx="600" cy="170" r="9"/><text class="t-xs" x="600" y="194" text-anchor="middle">s6</text>
+        <circle class="n-accent" cx="680" cy="170" r="9"/><text class="t-xs" x="680" y="194" text-anchor="middle">s7</text>
+        <text class="t-xs t-muted" x="698" y="174">done</text>
+
+        <!-- fork -->
+        <text class="t-sm t-b" x="16" y="254">fork</text>
+        <path class="e-amber" d="M280,120 V239" marker-end="url(#f0904-ahm)"/>
+        <text class="t-xs t-amber" x="288" y="196">load s2, edit the state</text>
+        <line class="e-amber" x1="280" y1="250" x2="440" y2="250"/>
+        <circle class="n-amber" cx="280" cy="250" r="9"/><text class="t-xs" x="280" y="274" text-anchor="middle">s2′</text>
+        <circle class="n-amber" cx="360" cy="250" r="9"/><text class="t-xs" x="360" y="274" text-anchor="middle">s3′</text>
+        <circle class="n-amber" cx="440" cy="250" r="9"/><text class="t-xs" x="440" y="274" text-anchor="middle">s4′</text>
+        <text class="t-xs t-muted" x="460" y="254">a new branch; the original is kept</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 9.4</b>One run, three ways to use its checkpoints. Resume continues from the latest one. Fork starts a new branch from an older one. Replay re-runs steps using recorded outputs instead of live calls, which is the only way to get the <em>same</em> states again.</figcaption>
+  </figure>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th></th><th>Starts from</th><th>Calls the model again?</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Resume</strong></td><td>The latest checkpoint</td><td>Yes, for the steps not yet done</td><td>The same run, finished</td></tr>
+        <tr><td><strong>Fork</strong></td><td>Any checkpoint, with edited state</td><td>Yes</td><td>A new branch beside the original</td></tr>
+        <tr><td><strong>Replay</strong></td><td>Any checkpoint, or the start</td><td>No: recorded outputs are fed back</td><td>Identical states, for debugging</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Replay is the subtle one. Re-running a step from a checkpoint calls the model again, and the model will write something different (Chapter 01). To reproduce a run you must <strong>record every non-deterministic input</strong> as it happens: model replies, tool results, clock readings, random numbers. A replay then feeds the recordings back instead of making the calls. That's your Stage 4 fake LLM, given a script recorded from a real run.</p>
+  <div class="box pitfall">
+    <span class="box-label">Pitfall · the checkpoint between propose and execute</span>
+    <p>Suppose a checkpoint is saved after the model proposed <code>send_email</code> but before you know whether the email went out. The process crashes. On resume, do you send it? If you do, it may go twice. If you don't, it may never go. A checkpoint alone can't answer this. The next section can.</p>
+  </div>
+
+  <h2 id="durable" data-short="Durable execution">Durable execution and idempotency</h2>
+  <p>Every side effect has a dangerous window: after the effect happened, before your harness recorded that it happened. A crash in that window leaves you with two bad options on restart.</p>
+  <ul>
+    <li><strong>Don't retry</strong> (at-most-once): the effect may be lost.</li>
+    <li><strong>Retry until recorded</strong> (at-least-once): the effect may happen twice.</li>
+  </ul>
+  <p>You can't make the window disappear. What you can do is make the second attempt harmless. An operation is <strong>idempotent</strong> if doing it twice has the same effect as doing it once. “Set the status to succeeded” is idempotent. “Add 5 to the counter” is not. Retrying until recorded, combined with idempotent operations, gives you what people loosely call exactly-once: the effect happens once, even when the code runs more than once.</p>
+  <p>When an operation isn't naturally idempotent, give it an <strong>idempotency key</strong>: a unique id for one <em>intended</em> effect, built so that every retry of that effect carries the same key. The receiver remembers the keys it has processed. When a repeat arrives, it returns the stored result instead of acting again. Many payment and messaging APIs accept a key like this for exactly this reason.</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Operation</th><th>Idempotent as written?</th><th>To make retries safe</th></tr></thead>
+      <tbody>
+        <tr><td>Read a file</td><td>Yes</td><td>Nothing needed</td></tr>
+        <tr><td>Write a file's whole content</td><td>Yes</td><td>Nothing needed</td></tr>
+        <tr><td>Append a line to a file</td><td>No</td><td>Check for a marker first, or write the whole file</td></tr>
+        <tr><td>Send an email</td><td>No</td><td>Idempotency key, deduplicated by the sender service</td></tr>
+        <tr><td>Charge a card</td><td>No</td><td>Idempotency key, which payment APIs commonly accept</td></tr>
+        <tr><td><strong>Spawn a child agent</strong></td><td><strong>No</strong></td><td>A deterministic child id; “create” does nothing if that id exists</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>The last row is yours. If a parent crashes after creating its children but before recording that it did, a naive resume creates a second set. Now two copies of each child do the same work and spend from the same budget.</p>
+
+  <h3>Durable execution, Temporal-style</h3>
+  <p><strong>Durable execution</strong> systems, of which Temporal is the best-known example, turn these ideas into a runtime. Code is split in two:</p>
+  <ul>
+    <li><strong>Workflow code</strong> decides what to do. It must be deterministic: given the same inputs and history, it makes the same calls in the same order.</li>
+    <li><strong>Activities</strong> do anything non-deterministic or external: model calls, tool calls, HTTP, the clock.</li>
+  </ul>
+  <p>Each activity's result is appended to an <strong>event history</strong> that is saved durably. If the worker crashes, another worker runs the workflow code again <em>from the top</em>. Each activity call first looks in the history. If a result is recorded, it returns that result without running anything. The first activity with no recorded result is where real execution resumes.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 320" role="img" aria-label="Durable execution. In attempt 1, five activities run: llm plan, tool search, spawn child, llm draft, send email. The results of the first four are saved in the history. Send email runs but the process crashes before saving its result. In attempt 2 the workflow runs from the top. The first four activities are answered from the history without running. Send email runs again with the same idempotency key, and the email service deduplicates it.">
+        <defs>
+          <marker id="f0905-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0905-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0905-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-sm t-b" x="16" y="86">attempt 1</text>
+        <text class="t-sm t-b" x="16" y="148">history</text>
+        <text class="t-sm t-b" x="16" y="216">attempt 2</text>
+
+        <!-- attempt 1 -->
+        <rect x="110" y="60" width="110" height="44" rx="6"/><text class="t-sm t-b" x="165" y="79" text-anchor="middle">llm: plan</text><text class="t-xs t-muted" x="165" y="96" text-anchor="middle">activity 1</text>
+        <rect x="235" y="60" width="110" height="44" rx="6"/><text class="t-sm t-b" x="290" y="79" text-anchor="middle">tool: search</text><text class="t-xs t-muted" x="290" y="96" text-anchor="middle">activity 2</text>
+        <rect x="360" y="60" width="110" height="44" rx="6"/><text class="t-sm t-b" x="415" y="79" text-anchor="middle">spawn child</text><text class="t-xs t-muted" x="415" y="96" text-anchor="middle">activity 3</text>
+        <rect x="485" y="60" width="110" height="44" rx="6"/><text class="t-sm t-b" x="540" y="79" text-anchor="middle">llm: draft</text><text class="t-xs t-muted" x="540" y="96" text-anchor="middle">activity 4</text>
+        <rect class="n-red" x="610" y="60" width="110" height="44" rx="6"/><text class="t-sm t-b" x="665" y="79" text-anchor="middle">send email</text><text class="t-xs t-red" x="665" y="96" text-anchor="middle">sent, then ✗ crash</text>
+        <line x1="220" y1="82" x2="233" y2="82" marker-end="url(#f0905-ah)"/>
+        <line x1="345" y1="82" x2="358" y2="82" marker-end="url(#f0905-ah)"/>
+        <line x1="470" y1="82" x2="483" y2="82" marker-end="url(#f0905-ah)"/>
+        <line x1="595" y1="82" x2="608" y2="82" marker-end="url(#f0905-ah)"/>
+
+        <!-- history -->
+        <line x1="165" y1="104" x2="165" y2="128" marker-end="url(#f0905-ah)"/><text class="t-xs t-muted" x="171" y="120">record</text>
+        <line x1="290" y1="104" x2="290" y2="128" marker-end="url(#f0905-ah)"/>
+        <line x1="415" y1="104" x2="415" y2="128" marker-end="url(#f0905-ah)"/>
+        <line x1="540" y1="104" x2="540" y2="128" marker-end="url(#f0905-ah)"/>
+        <rect class="n-sunken" x="120" y="130" width="90" height="26" rx="4"/><text class="t-xs" x="165" y="147" text-anchor="middle">result 1 saved</text>
+        <rect class="n-sunken" x="245" y="130" width="90" height="26" rx="4"/><text class="t-xs" x="290" y="147" text-anchor="middle">result 2 saved</text>
+        <rect class="n-sunken" x="370" y="130" width="90" height="26" rx="4"/><text class="t-xs" x="415" y="147" text-anchor="middle">result 3 saved</text>
+        <rect class="n-sunken" x="495" y="130" width="90" height="26" rx="4"/><text class="t-xs" x="540" y="147" text-anchor="middle">result 4 saved</text>
+        <rect class="n-red" x="620" y="130" width="90" height="26" rx="4"/><text class="t-xs t-red" x="665" y="147" text-anchor="middle">nothing saved</text>
+
+        <!-- attempt 2 -->
+        <line class="e-dash e-muted" x1="165" y1="156" x2="165" y2="188" marker-end="url(#f0905-ahm)"/><text class="t-xs t-muted" x="171" y="176">replay</text>
+        <line class="e-dash e-muted" x1="290" y1="156" x2="290" y2="188" marker-end="url(#f0905-ahm)"/>
+        <line class="e-dash e-muted" x1="415" y1="156" x2="415" y2="188" marker-end="url(#f0905-ahm)"/>
+        <line class="e-dash e-muted" x1="540" y1="156" x2="540" y2="188" marker-end="url(#f0905-ahm)"/>
+        <rect class="n-ghost" x="110" y="190" width="110" height="44" rx="6"/><text class="t-sm" x="165" y="209" text-anchor="middle">llm: plan</text><text class="t-xs t-muted" x="165" y="226" text-anchor="middle">from history</text>
+        <rect class="n-ghost" x="235" y="190" width="110" height="44" rx="6"/><text class="t-sm" x="290" y="209" text-anchor="middle">tool: search</text><text class="t-xs t-muted" x="290" y="226" text-anchor="middle">from history</text>
+        <rect class="n-ghost" x="360" y="190" width="110" height="44" rx="6"/><text class="t-sm" x="415" y="209" text-anchor="middle">spawn child</text><text class="t-xs t-muted" x="415" y="226" text-anchor="middle">from history</text>
+        <rect class="n-ghost" x="485" y="190" width="110" height="44" rx="6"/><text class="t-sm" x="540" y="209" text-anchor="middle">llm: draft</text><text class="t-xs t-muted" x="540" y="226" text-anchor="middle">from history</text>
+        <rect class="n-accent n-thick" x="610" y="190" width="110" height="44" rx="6"/><text class="t-sm t-b" x="665" y="209" text-anchor="middle">send email</text><text class="t-xs" x="665" y="226" text-anchor="middle">same key, deduped</text>
+        <line x1="220" y1="212" x2="233" y2="212" marker-end="url(#f0905-ah)"/>
+        <line x1="345" y1="212" x2="358" y2="212" marker-end="url(#f0905-ah)"/>
+        <line x1="470" y1="212" x2="483" y2="212" marker-end="url(#f0905-ah)"/>
+        <line class="e-accent" x1="595" y1="212" x2="608" y2="212" marker-end="url(#f0905-aha)"/>
+
+        <text class="t-sm" x="16" y="264">Attempt 2 runs the workflow code again from the top. Activities 1–4 find their results in the history and don't run.</text>
+        <text class="t-sm" x="16" y="284">Activity 5 has no saved result, so it runs again, carrying the same idempotency key as before.</text>
+        <text class="t-sm t-accent" x="16" y="304">The email service has already processed that key, so no second email goes out.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 9.5</b>A crash and a resume. The history turns “run it again” into “replay what's recorded, then continue”. The crash window is still there (activity 5 ran but wasn't saved). The idempotency key is what makes running it a second time harmless.</figcaption>
+  </figure>
+
+  <p class="code-label">The core of an activity call, in plain Python</p>
+<pre><code><span class="k">def</span> activity(run, name, fn, *args):
+    key = <span class="s">f"{run.id}:{run.next_seq()}:{name}"</span>   <span class="c"># n-th activity in workflow order: same on every attempt</span>
+    <span class="k">if</span> key <span class="k">in</span> run.history:                      <span class="c"># finished before the crash</span>
+        <span class="k">return</span> run.history[key]                  <span class="c"># replay: return the recording, don't run</span>
+    result = fn(*args, idempotency_key=key)       <span class="c"># the receiver dedupes on the key</span>
+    run.history.save(key, result)                 <span class="c"># durable write before moving on</span>
+    <span class="k">return</span> result</code></pre>
+  <p>Now you can see why workflow code must be deterministic. The key depends on <code>next_seq()</code>, the position of this call in the workflow's order. If attempt 2 calls activities in a different order, because it read the clock or a random number, the keys stop lining up with the history. Then replay hands step 3's result to step 4. That's why the clock and randomness have to go through activities too.</p>
+  <p>It also solves the replay problem from the last section. A model call is an activity, so its reply is in the history. Attempt 2 doesn't ask the model again; it reads what the model said the first time.</p>
+  <div class="box note">
+    <span class="box-label">Scope</span>
+    <p>You don't need Temporal for your harness, and Stage 6 doesn't ask for it. The point is the mechanism: record results durably, rebuild by replaying, key every side effect. You can apply it to your own JSONL log and your own spawn function at whatever depth Stage 6 needs.</p>
+  </div>
+
+  <h2 id="interrupts" data-short="Human interrupts">Human-in-the-loop interrupts</h2>
+  <p>An <strong>interrupt</strong> is a planned pause. The run saves a checkpoint, records what it's waiting for, moves to <code>waiting_on_human</code>, and releases its process. When the answer arrives, whether seconds or days later, the harness loads the checkpoint and continues, with the answer as a new input.</p>
+  <p>Compare that with calling <code>input()</code> inside the loop. A blocking call holds a process, a connection and an open slot the whole time. It dies on every deploy or restart, and a thousand waiting runs need a thousand live processes. A durable interrupt holds nothing except a row in the state store.</p>
+  <p>Four kinds of interrupt cover most needs:</p>
+  <ul>
+    <li><strong>Approve or reject</strong> a proposed action.</li>
+    <li><strong>Edit</strong> the proposal before it runs, for example changing an email's recipient.</li>
+    <li><strong>Answer</strong> a question the agent asked.</li>
+    <li><strong>Review</strong> an output before anything downstream uses it.</li>
+  </ul>
+
+  <div class="trace">
+    <div class="trace-title">Run r19 · an approval that waits two hours</div>
+    <div class="tr tr-act"><span class="tr-role">tool_use</span><span class="tr-body">send_email {"to": "all-staff@example.com", "subject": "Q3 results draft"}</span></div>
+    <div class="tr tr-sys"><span class="tr-role">harness</span><span class="tr-body">policy: ask (external send) · checkpoint saved at step 6 · status running → waiting_on_human · process released</span></div>
+    <div class="tr tr-user"><span class="tr-role">reviewer</span><span class="tr-body">(2 h 10 min later) Edit: to = "finance-team@example.com". Approve.</span></div>
+    <div class="tr tr-obs"><span class="tr-role">harness</span><span class="tr-body">load checkpoint step 6 · status waiting_on_human → running · apply edit · execute with key r19:6:send_email · approver recorded</span></div>
+    <div class="tr tr-obs"><span class="tr-role">tool_result</span><span class="tr-body">Sent to finance-team@example.com</span></div>
+    <div class="tr tr-final"><span class="tr-role">answer</span><span class="tr-body">Draft sent to the finance team for review, as edited by the reviewer.</span></div>
+  </div>
+  <p>To resume, the harness needed five things: the run id, the checkpoint, the pending proposal (with its <code>tool_use_id</code>), the human's response, and who gave it. The last one is for the audit trail. If any of the five isn't stored, the run can't be resumed safely.</p>
+  <div class="box pitfall">
+    <span class="box-label">Pitfall · what runs twice on resume</span>
+    <p>Some frameworks resume an interrupted node by running it again from its beginning; LangGraph documents this behavior. Anything the node did <em>before</em> the interrupt point then happens twice. Put side effects after the interrupt, or make them idempotent. It's the durable-execution problem again, in a smaller form.</p>
+  </div>
+
+  <h2 id="events" data-short="Event sourcing">Event sourcing</h2>
+  <p>There are two ways to store a run.</p>
+  <ul>
+    <li><strong>State-based:</strong> store the current state and overwrite it on every change. The answer to “what is true now?” is one read. The answer to “how did we get here?” is gone.</li>
+    <li><strong>Event-sourced:</strong> store the changes themselves, as an append-only log of <strong>events</strong>. The current state isn't stored at all. It's computed by starting from an initial state and applying every event in order.</li>
+  </ul>
+  <p>That computation is a <strong>fold</strong>, also called a reduce: <code>state = fold(apply, events, initial)</code>. <code>apply</code> takes a state and one event and returns the next state. It's the same idea as the reducers earlier in this chapter, applied over the whole history instead of one step.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 324" role="img" aria-label="Event sourcing. On the left is an append-only event log with eight events: root run_started, root spawned a1, root spawned a2, a1 model_call with 900 tokens, a2 model_call with 700 tokens, a1 succeeded, a2 failed with reason timeout, root succeeded. An arrow leads to a fold box that applies each event in seq order. Three arrows lead from the fold to three views: an agent tree, a status table, and budget spent of 1,600 tokens.">
+        <defs>
+          <marker id="f0906-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0906-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <!-- event log -->
+        <rect class="n-sunken" x="20" y="36" width="380" height="254" rx="8"/>
+        <text class="t-sm t-b" x="32" y="58">event log (append-only)</text>
+        <text class="t-xs t-muted t-b" x="36" y="80">seq</text>
+        <text class="t-xs t-muted t-b" x="70" y="80">agent</text>
+        <text class="t-xs t-muted t-b" x="130" y="80">event</text>
+        <text class="t-xs t-muted t-b" x="250" y="80">data</text>
+        <line class="e-muted" x1="32" y1="88" x2="388" y2="88"/>
+        <text class="t-xs" x="36" y="104">1</text><text class="t-xs" x="70" y="104">root</text><text class="t-xs" x="130" y="104">run_started</text><text class="t-xs t-muted" x="250" y="104">task=…</text>
+        <text class="t-xs" x="36" y="128">2</text><text class="t-xs" x="70" y="128">root</text><text class="t-xs" x="130" y="128">spawned</text><text class="t-xs t-muted" x="250" y="128">child=a1</text>
+        <text class="t-xs" x="36" y="152">3</text><text class="t-xs" x="70" y="152">root</text><text class="t-xs" x="130" y="152">spawned</text><text class="t-xs t-muted" x="250" y="152">child=a2</text>
+        <text class="t-xs" x="36" y="176">4</text><text class="t-xs" x="70" y="176">a1</text><text class="t-xs" x="130" y="176">model_call</text><text class="t-xs t-muted" x="250" y="176">tokens=900</text>
+        <text class="t-xs" x="36" y="200">5</text><text class="t-xs" x="70" y="200">a2</text><text class="t-xs" x="130" y="200">model_call</text><text class="t-xs t-muted" x="250" y="200">tokens=700</text>
+        <text class="t-xs" x="36" y="224">6</text><text class="t-xs" x="70" y="224">a1</text><text class="t-xs" x="130" y="224">succeeded</text><text class="t-xs t-muted" x="250" y="224">result=r1</text>
+        <text class="t-xs" x="36" y="248">7</text><text class="t-xs" x="70" y="248">a2</text><text class="t-xs t-red" x="130" y="248">failed</text><text class="t-xs t-muted" x="250" y="248">reason=timeout</text>
+        <text class="t-xs" x="36" y="272">8</text><text class="t-xs" x="70" y="272">root</text><text class="t-xs" x="130" y="272">succeeded</text><text class="t-xs t-muted" x="250" y="272">result=r0</text>
+
+        <!-- fold -->
+        <line x1="400" y1="165" x2="426" y2="165" marker-end="url(#f0906-ah)"/>
+        <rect class="n-accent n-thick" x="428" y="128" width="110" height="74" rx="8"/>
+        <text class="t-b" x="483" y="154" text-anchor="middle">fold</text>
+        <text class="t-xs" x="483" y="172" text-anchor="middle">apply(state, e)</text>
+        <text class="t-xs t-muted" x="483" y="188" text-anchor="middle">in seq order</text>
+        <line class="e-accent" x1="538" y1="160" x2="568" y2="88" marker-end="url(#f0906-aha)"/>
+        <line class="e-accent" x1="538" y1="166" x2="568" y2="176" marker-end="url(#f0906-aha)"/>
+        <line class="e-accent" x1="538" y1="172" x2="568" y2="252" marker-end="url(#f0906-aha)"/>
+
+        <!-- views -->
+        <rect x="570" y="36" width="170" height="96" rx="8"/>
+        <text class="t-sm t-b" x="582" y="56">agent tree</text>
+        <text class="t-xs" x="590" y="78">root  ✓</text>
+        <text class="t-xs" x="600" y="98">├ a1  ✓</text>
+        <text class="t-xs t-red" x="600" y="118">└ a2  ✗ timeout</text>
+
+        <rect x="570" y="146" width="170" height="62" rx="8"/>
+        <text class="t-sm t-b" x="582" y="166">status</text>
+        <text class="t-xs" x="582" y="184">a1 succeeded · a2 failed</text>
+        <text class="t-xs" x="582" y="200">root succeeded</text>
+
+        <rect x="570" y="222" width="170" height="68" rx="8"/>
+        <text class="t-sm t-b" x="582" y="242">budget spent</text>
+        <text class="t-sm t-b t-accent" x="582" y="262">1,600 tokens</text>
+        <text class="t-xs t-muted" x="582" y="280">900 + 700, from events 4–5</text>
+
+        <text class="t-sm" x="20" y="314">state = fold(apply, events, initial). Change apply, or add a view, then rebuild from the same log.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 9.6</b>One log, many views. None of the three views on the right is stored; each is computed from the eight events. If you later want a fourth view, say tokens per depth level, you write a new <code>apply</code> and run it over the log you already have.</figcaption>
+  </figure>
+
+  <p class="code-label">Rebuilding state from the log in Figure 9.6</p>
+<pre><code><span class="k">def</span> apply(state, e):
+    <span class="k">if</span> e[<span class="s">"event"</span>] == <span class="s">"run_started"</span>:
+        state.agents[e[<span class="s">"agent"</span>]] = Agent(parent=<span class="k">None</span>, status=<span class="s">"running"</span>)
+    <span class="k">elif</span> e[<span class="s">"event"</span>] == <span class="s">"spawned"</span>:
+        state.agents[e[<span class="s">"data"</span>][<span class="s">"child"</span>]] = Agent(parent=e[<span class="s">"agent"</span>], status=<span class="s">"running"</span>)
+    <span class="k">elif</span> e[<span class="s">"event"</span>] == <span class="s">"model_call"</span>:
+        state.tokens_spent += e[<span class="s">"data"</span>][<span class="s">"tokens"</span>]
+    <span class="k">elif</span> e[<span class="s">"event"</span>] <span class="k">in</span> (<span class="s">"succeeded"</span>, <span class="s">"failed"</span>):
+        state.agents[e[<span class="s">"agent"</span>]].status = e[<span class="s">"event"</span>]
+    <span class="k">return</span> state
+
+state = RunState()
+<span class="k">for</span> e <span class="k">in</span> sorted(events, key=<span class="k">lambda</span> e: e[<span class="s">"seq"</span>]):   <span class="c"># order is part of the meaning</span>
+    state = apply(state, e)</code></pre>
+
+  <h3>What you get, and what it costs</h3>
+  <div class="cols-2">
+    <div class="card">
+      <h4>You get</h4>
+      <ul>
+        <li><strong>An audit trail for free.</strong> What happened, in what order, is the data itself.</li>
+        <li><strong>Time travel.</strong> Fold the first <em>n</em> events to see the state at step <em>n</em>.</li>
+        <li><strong>New views without migration.</strong> Write a new <code>apply</code>; the log doesn't change.</li>
+        <li><strong>A natural fit for append-only files</strong>, such as JSONL.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>It costs</h4>
+      <ul>
+        <li><strong>Rebuild time.</strong> Folding a long log is slow, so you save <strong>snapshots</strong>: the folded state at seq <em>n</em>. Rebuild = load snapshot + fold the events after <em>n</em>.</li>
+        <li><strong>Event schema changes.</strong> Old events stay in old shapes, so <code>apply</code> must handle every version.</li>
+        <li><strong>Discipline.</strong> <code>apply</code> must be deterministic, and each event must carry enough data to rebuild from.</li>
+      </ul>
+    </div>
+  </div>
+  <p>The last cost is where trace logs usually fall short. An event that says “a1 succeeded” but leaves out the result can tell you <em>that</em> a1 finished, not <em>what</em> it returned. You can't rebuild a parent's aggregation from that.</p>
+  <div class="box key">
+    <span class="box-label">Connecting the pieces</span>
+    <p>These ideas are one idea seen from different sides. Temporal's event history is an event log. A checkpoint is a snapshot. Replay is a fold. Reducers are <code>apply</code> for one step. Once your run is a value built from a log of events, you can resume it, fork it, audit it and replay it.</p>
+  </div>
+
+  <div class="box pitfall">
+    <span class="box-label">Misconceptions to drop</span>
+    <ul>
+      <li>“A checkpoint makes resume safe.” It makes resume <em>possible</em>. Safe also needs idempotent side effects (Figure 9.5).</li>
+      <li>“A graph means no model decides anything.” A conditional edge can be a model call. The graph only limits its answer to the names you declared.</li>
+      <li>“Durable execution means exactly once.” Activities run <em>at least</em> once. An exactly-once <em>effect</em> needs an idempotency key on the receiving side.</li>
+      <li>“We log everything, so we have event sourcing.” Only if every event carries enough data to rebuild state. “a1 succeeded” with no result is a log line, not an event.</li>
+      <li>“State is whatever the variables hold.” State the program can't save and reload is state a crash will erase.</li>
+    </ul>
+  </div>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Stage 1.</strong> Your trace is a JSONL event log. Could you rebuild the whole agent tree, with each agent's final status, from that file alone? List the fields each event must carry for that to work. Is <code>seq</code> one of them, and why isn't <code>ts</code> enough?</li>
+      <li><strong>Stage 2.</strong> A spawn that the policy rejects: does the rejected child ever exist as an agent with a state, or only as an event on the parent? Which choice makes your Stage 6 counts simpler?</li>
+      <li><strong>Stage 6.</strong> Write (on paper first) the <code>apply</code> that folds your trace into a per-agent token table. If you can't write it, your events are missing data. Find out which before Stage 6, not during it.</li>
+      <li><strong>Later.</strong> Nothing in your plan needs durable execution yet. Note the point where it would: the first run long enough that losing it to a crash costs more than the engineering.</li>
+    </ul>
+  </div>
+
+  <h2 id="check">Check yourself</h2>
+  <p>Answer each one out loud or on paper before you open it.</p>
+  <div class="quiz">
+    <details>
+      <summary><span class="tag recall">Recall</span> What does “make the run a value” mean, and what does it buy you?</summary>
+      <div><p>Control and state are stored as explicit data (a status field, a named next step, a state record, an event log) instead of living only in the call stack. Because it's data, the run can be saved, inspected, paused, resumed, replayed and tested. A crash erases a call stack. It doesn't erase a file.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag recall">Recall</span> What are resume, fork and replay, and how do they differ?</summary>
+      <div><p>Resume continues from the latest checkpoint. Fork starts a new branch from an older checkpoint, leaving the original history intact. Replay re-runs steps using <em>recorded</em> outputs instead of live calls. That makes replay the only one of the three that is deterministic with an LLM in the loop, and the one you debug with.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> The run total is 1,000 tokens. Two children finish at the same time: one spent 300, the other 500. What is the total under an “overwrite” reducer, and under an “add” reducer?</summary>
+      <div><p>Overwrite: each child read 1,000 and writes back its own total, 1,300 or 1,500. Whichever writes last wins, and the other update is lost. Add: each child contributes a delta, merged in either order, giving 1,800. Shared counters need reducers that merge deltas, which is the <code>tokens_used</code> row in this chapter's reducer table.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> The process crashes after a <code>send_email</code> activity ran but before its completion was recorded. What does a durable-execution engine do on restart, and what keeps it from sending twice?</summary>
+      <div><p>It replays the workflow from its history. The activity has no recorded completion, so it runs again: activities are at-least-once. The idempotency key passed with the request lets the email service recognise the duplicate and drop it. The engine guarantees the retry. The key makes the retry harmless.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> You want a human to approve any plan with more than five children. Where does the interrupt go, what must be saved, and what can go wrong on resume?</summary>
+      <div><p>Put the interrupt after the plan is validated and before anything is spawned. Save the validated plan, the agent's state and the budget reservation, so the resumed run acts on exactly what the human saw. The risk: if the framework re-runs the interrupted node from its beginning, anything before the interrupt runs again, such as a second planning call that produces a different plan. Keep side effects and fresh model calls after the interrupt, or record their results.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> Your trace logs <code>{"event": "succeeded", "agent": "a1"}</code>. What can't you rebuild from it, and what is the smallest fix?</summary>
+      <div><p>You know that a1 finished, but not what it returned, so you can't rebuild the parent's aggregation, replay the parent, or check the parent's answer against its inputs. Smallest fix: include the Result in the event (or a reference to where it's stored), plus the tokens charged. Then the event, not the process memory, is the source of truth.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “When would you model an agent system as an explicit graph instead of letting the model drive the loop?”</summary>
+      <div><p>Use a graph when the steps are known in advance and you need guarantees: required review steps, approvals, audit, resumable long runs, and testable routing. Let the model drive when the path really can't be known in advance and the task needs flexibility. A common middle ground: a declared graph whose conditional edges are model calls, with each answer checked against the declared edge names. Mention the cost: graphs are more code and less adaptive, and model-driven loops are harder to bound and debug.</p></div>
+    </details>
+  </div>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><strong>LangGraph documentation</strong> (LangChain): state graphs, reducers, checkpointers, interrupts.<span class="why">The clearest working example of graphs, reducers and checkpoints in an agent framework. Read the persistence and interrupt pages.</span></li>
+    <li><strong>Temporal documentation:</strong> workflows, activities, event history and deterministic replay.<span class="why">The reference model for durable execution. Read about the split between deterministic workflow code and retryable activities.</span></li>
+    <li><strong>Martin Fowler, “Event Sourcing”</strong> (2005).<span class="why">The short original description of the pattern behind Figure 9.6.</span></li>
+    <li><strong>Martin Kleppmann, <em>Designing Data-Intensive Applications</em></strong> (O'Reilly, 2017), the chapters on stream processing and derived data.<span class="why">Event logs, snapshots and derived views, explained for engineers. Worth it for your trace design.</span></li>
+    <li><strong>David Harel, “Statecharts: A Visual Formalism for Complex Systems”</strong> (<em>Science of Computer Programming</em>, 1987).<span class="why">Where nested states and boundaries like Figure 9.1's dashed region come from.</span></li>
+    <li><strong>Erik Schluntz and Barry Zhang, “Building effective agents”</strong> (Anthropic, 2024).<span class="why">The workflow-vs-agent split from Chapter 02, which is the same split as explicit vs implicit control flow.</span></li>
+  </ul>
+
+  <section class="recall-card" aria-labelledby="recall-09">
+    <h2 id="recall-09" data-short="Recall card">Recall card</h2>
+    <p class="muted small">Five lines to rehearse. If you can expand each into a minute of explanation, you know this chapter.</p>
+    <ol>
+      <li>Two questions at every moment: what runs next (control flow) and what is true now (state). Make both explicit data.</li>
+      <li>A lifecycle state machine names each agent's condition. Terminal states are final, and cancellation can arrive in any live state.</li>
+      <li>Graphs declare what can run next. A conditional edge chooses among declared names, and a model may be the one choosing.</li>
+      <li>Reducers merge updates. Shared counters need “add a delta”, not “overwrite”.</li>
+      <li>Checkpoint = snapshot, replay = fold over an event log. Resume is only safe when side effects are idempotent.</li>
+    </ol>
+  </section>
+
+  <div class="done">
+    <input type="checkbox" id="done-toggle" data-chapter="09">
+    <label for="done-toggle">I can explain this chapter without notes<small>Saved in this browser only. It updates the count on the guide's home page.</small></label>
+  </div>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="08-agent-harness.html"><small>Previous · Chapter 08</small>What a harness is</a>
+    <a class="next" href="10-concurrency.html"><small>Next · Chapter 10</small>Concurrency for agents</a>
+  </nav>
+</main>
+<aside class="toc-rail" aria-label="On this page"><p class="toc-title">In this chapter</p><nav data-toc></nav></aside>
+</div>
+</body>
+</html>

@@ -1,0 +1,908 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Reasoning and Planning · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar"><div class="topbar-inner">
+  <a class="brand" href="../index.html">Loop <span>→</span> Swarm</a>
+  <div class="crumbs"><a href="../index.html">Guide</a> · Part 2 · Thinking &amp; memory · Chapter 05</div>
+  <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+</div></header>
+
+<div class="page has-toc">
+<main class="chapter">
+  <header class="ch-head">
+    <p class="eyebrow"><b>Part 2 · Thinking &amp; memory</b> · Chapter 05 · Level L2</p>
+    <h1>Reasoning and planning patterns</h1>
+    <p class="lede">Every pattern in this chapter answers the same three questions. How many model calls does a task get? What does each call see? And what decides the next call: the model, your code, or the environment? Once you can answer those for a pattern, you can predict its cost, its latency, and how it fails.</p>
+    <ul class="ch-meta">
+      <li><b>60 min</b> reading</li>
+      <li>Builds on: <b>Ch 01, 03, 04</b></li>
+      <li>Your project: <b>Stage 4, Stage 5</b></li>
+    </ul>
+    <ol class="where" aria-label="Where this chapter sits in the guide">
+      <li class="past"><span>Part 1</span>Foundations</li>
+      <li class="here"><span>Part 2</span>Thinking &amp; memory</li>
+      <li><span>Part 3</span>The harness</li>
+      <li><span>Part 4</span>Multi-agent</li>
+      <li><span>Part 5</span>Together</li>
+    </ol>
+  </header>
+
+  <details class="toc-mobile"><summary>In this chapter</summary><div data-toc></div></details>
+
+  <div class="box predict">
+    <span class="box-label">Predict first · 10 min</span>
+    <p>Write answers in <code>docs/LEARNING_NOTES.md</code> under “Guide ch05”. Tag each one <em>sure</em> or <em>guess</em>. Don't read on until you're done.</p>
+    <ol>
+      <li>An agent must get yesterday's error count for three services (auth, billing, search), then find the owner of the worst one. How many model calls does a plain ReAct loop need? Can you think of a design that needs only two? Write numbers.</li>
+      <li>You ask a model to critique its own answer and then fix it. Describe one task where this helps and one where it changes nothing, or makes things worse.</li>
+      <li>Reasoning models “think” before they answer. Name one thing an explicit, written plan gives <em>your code</em> that the model's internal thinking doesn't.</li>
+    </ol>
+  </div>
+
+  <h2 id="big-idea">The big idea</h2>
+  <p>Chapter 01 showed that one model call turns a context into tokens, and Chapter 03 wrapped that call in a loop. Reasoning and planning patterns are different ways of <em>arranging</em> calls. Some spend more tokens inside a single call. Some split the work into a planning call and cheaper execution. Some run the same work several times and compare. Some search a tree of possibilities.</p>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>Reasoning patterns trade model calls and tokens for reliability.</strong> More calls buy more chances to catch an error, or more ways to bring outside facts in. They cost money and time. The engineering skill is buying only as much reliability as the task needs, and knowing <em>which kind</em> of mistake each pattern actually catches.</p>
+  </div>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 760 300" role="img" aria-label="A map of reasoning patterns in four columns, ordered by how many model calls they use. Think then answer: chain-of-thought, self-consistency, native thinking. Think and act: ReAct, plan-and-execute, ReWOO, LLMCompiler. Think, check, retry: Self-Refine, Reflexion. Search: Tree of Thoughts, LATS.">
+        <defs>
+          <marker id="f0501-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-sm t-muted" x="20" y="18">more model calls per task → more cost and latency, more robustness on hard problems</text>
+        <line class="e-muted" x1="20" y1="28" x2="740" y2="28" marker-end="url(#f0501-ah)"/>
+
+        <rect class="n-sunken" x="20" y="42" width="170" height="44" rx="6"/>
+        <text class="t-b" x="105" y="60" text-anchor="middle">Think, then answer</text>
+        <text class="t-sm t-muted" x="105" y="77" text-anchor="middle">one call, no tools</text>
+        <rect class="n-sunken" x="205" y="42" width="170" height="44" rx="6"/>
+        <text class="t-b" x="290" y="60" text-anchor="middle">Think and act</text>
+        <text class="t-sm t-muted" x="290" y="77" text-anchor="middle">tools inside the loop</text>
+        <rect class="n-sunken" x="390" y="42" width="170" height="44" rx="6"/>
+        <text class="t-b" x="475" y="60" text-anchor="middle">Think, check, retry</text>
+        <text class="t-sm t-muted" x="475" y="77" text-anchor="middle">feedback between attempts</text>
+        <rect class="n-sunken" x="575" y="42" width="170" height="44" rx="6"/>
+        <text class="t-b" x="660" y="60" text-anchor="middle">Search</text>
+        <text class="t-sm t-muted" x="660" y="77" text-anchor="middle">explore many paths</text>
+
+        <!-- column 1 -->
+        <rect x="20" y="100" width="170" height="36" rx="5"/>
+        <text class="t-b" x="105" y="115" text-anchor="middle">Chain-of-thought</text>
+        <text class="t-xs t-muted" x="105" y="129" text-anchor="middle">Wei et al. 2022</text>
+        <rect x="20" y="144" width="170" height="36" rx="5"/>
+        <text class="t-b" x="105" y="159" text-anchor="middle">Self-consistency</text>
+        <text class="t-xs t-muted" x="105" y="173" text-anchor="middle">Wang et al. 2022</text>
+        <rect class="n-violet" x="20" y="188" width="170" height="36" rx="5"/>
+        <text class="t-b" x="105" y="203" text-anchor="middle">Native thinking</text>
+        <text class="t-xs t-muted" x="105" y="217" text-anchor="middle">reasoning models, 2024 on</text>
+
+        <!-- column 2 -->
+        <rect class="n-accent" x="205" y="100" width="170" height="36" rx="5"/>
+        <text class="t-b" x="290" y="115" text-anchor="middle">ReAct</text>
+        <text class="t-xs t-muted" x="290" y="129" text-anchor="middle">Yao et al. 2022</text>
+        <rect class="n-accent" x="205" y="144" width="170" height="36" rx="5"/>
+        <text class="t-b" x="290" y="159" text-anchor="middle">Plan-and-execute</text>
+        <text class="t-xs t-muted" x="290" y="173" text-anchor="middle">e.g. Plan-and-Solve, 2023</text>
+        <rect x="205" y="188" width="170" height="36" rx="5"/>
+        <text class="t-b" x="290" y="203" text-anchor="middle">ReWOO</text>
+        <text class="t-xs t-muted" x="290" y="217" text-anchor="middle">Xu et al. 2023</text>
+        <rect x="205" y="232" width="170" height="36" rx="5"/>
+        <text class="t-b" x="290" y="247" text-anchor="middle">LLMCompiler</text>
+        <text class="t-xs t-muted" x="290" y="261" text-anchor="middle">Kim et al. 2023</text>
+
+        <!-- column 3 -->
+        <rect x="390" y="100" width="170" height="36" rx="5"/>
+        <text class="t-b" x="475" y="115" text-anchor="middle">Self-Refine</text>
+        <text class="t-xs t-muted" x="475" y="129" text-anchor="middle">Madaan et al. 2023</text>
+        <rect x="390" y="144" width="170" height="36" rx="5"/>
+        <text class="t-b" x="475" y="159" text-anchor="middle">Reflexion</text>
+        <text class="t-xs t-muted" x="475" y="173" text-anchor="middle">Shinn et al. 2023</text>
+
+        <!-- column 4 -->
+        <rect x="575" y="100" width="170" height="36" rx="5"/>
+        <text class="t-b" x="660" y="115" text-anchor="middle">Tree of Thoughts</text>
+        <text class="t-xs t-muted" x="660" y="129" text-anchor="middle">Yao et al. 2023</text>
+        <rect x="575" y="144" width="170" height="36" rx="5"/>
+        <text class="t-b" x="660" y="159" text-anchor="middle">LATS</text>
+        <text class="t-xs t-muted" x="660" y="173" text-anchor="middle">Zhou et al. 2023</text>
+
+        <!-- legend -->
+        <rect class="n-accent" x="20" y="278" width="14" height="12" rx="2"/>
+        <text class="t-sm" x="40" y="288">the two shapes most harnesses start from</text>
+        <rect class="n-violet" x="300" y="278" width="14" height="12" rx="2"/>
+        <text class="t-sm" x="320" y="288">reasoning inside the model, not in your code</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 5.1</b>The pattern map for this chapter. Columns run from cheap to expensive. The columns aren't exclusive: Reflexion uses a ReAct actor, LATS searches over ReAct trajectories, and a plan-and-execute executor is often a small ReAct loop.</figcaption>
+  </figure>
+
+  <p>Two questions sort every pattern on the map:</p>
+  <ul>
+    <li><strong>Where does the plan live?</strong> Inside the model's head (CoT, ReAct, native thinking), or as an explicit artifact your code holds (plan-and-execute, ReWOO, LLMCompiler)? A plan your code holds can be validated, budgeted, parallelized and shown to a human before anything runs.</li>
+    <li><strong>Where does feedback come from?</strong> Nowhere (CoT), from the model itself (Self-Refine), from the environment (ReAct observations, Reflexion's tests), or from a search over many attempts (ToT, LATS). Feedback from outside the model is the kind that catches the errors the model can't see.</li>
+  </ul>
+
+  <h2 id="cot" data-short="CoT and self-consistency">Chain-of-thought and self-consistency</h2>
+  <p><strong>Chain-of-thought (CoT)</strong> means the model writes out intermediate steps before the answer. Wei et al. (2022) showed it by putting worked examples with reasoning into the prompt (few-shot CoT). Kojima et al. (2022) found that appending “Let's think step by step” gets much of the same effect with no examples (zero-shot CoT).</p>
+
+  <h3>Why it works: tokens are computation</h3>
+  <p>A transformer spends roughly a fixed amount of computation per token it produces. If the answer is the very next token, the model gets one forward pass to compute it. If it first writes “23 − 20 = 3”, two things change:</p>
+  <ul>
+    <li><strong>More passes.</strong> Each intermediate token is another forward pass that can do part of the work.</li>
+    <li><strong>Intermediate results become context.</strong> “3” is now in the context window, so every later token can attend to it. The written reasoning acts as working memory the model can read back. It doesn't have to hold the whole calculation in one pass.</li>
+  </ul>
+  <p>This also explains the limit. CoT gives the model more computation over what it already knows. It can't add facts. If the model doesn't know who owns the billing service, more thinking produces a more elaborate guess.</p>
+
+  <div class="box pitfall">
+    <span class="box-label">Pitfall · the reasoning isn't a proof</span>
+    <p>The written chain isn't guaranteed to be what produced the answer. Turpin et al. (2023) biased models toward a particular answer, for example by always making option (A) correct in the examples. The models followed the bias, and their written explanations never mentioned it. Treat CoT text as a useful trace for debugging. Don't build a safety check that assumes the stated reasoning is the real reason.</p>
+  </div>
+
+  <h3>Self-consistency: sample several chains, then vote</h3>
+  <p>Wang et al. (2022) noticed that a hard problem usually has several valid reasoning paths that reach the same answer, while mistakes tend to scatter. So: sample <em>N</em> independent CoT answers to the same question and return the most common final answer. The individual chains are thrown away. Only the answers are compared.</p>
+
+  <p class="code-label">Self-consistency in plain Python</p>
+<pre><code><span class="k">from</span> collections <span class="k">import</span> Counter
+
+<span class="k">def</span> self_consistent(question, n=<span class="n">5</span>):
+    answers = []
+    <span class="k">for</span> _ <span class="k">in</span> range(n):                     <span class="c"># independent calls: run them concurrently</span>
+        out = llm.complete(messages=[{<span class="s">"role"</span>: <span class="s">"user"</span>,
+                                      <span class="s">"content"</span>: question + COT_SUFFIX}])
+        answers.append(extract_final_answer(out.text))   <span class="c"># e.g. parse "Answer: 9"</span>
+    best, votes = Counter(answers).most_common(<span class="n">1</span>)[<span class="n">0</span>]
+    <span class="hl"><span class="k">return</span> best, votes / n</span>                 <span class="c"># agreement is a free confidence signal</span></code></pre>
+
+  <p>Three properties to remember:</p>
+  <ul>
+    <li><strong>N times the tokens, about one call of latency.</strong> The samples are independent, so they can run in parallel (Chapter 10).</li>
+    <li><strong>It needs answers you can compare.</strong> A number, a label, a multiple-choice letter, a yes/no. For an essay or a plan, “most common” is undefined. You'd need a judge model or a similarity measure, which is a different pattern.</li>
+    <li><strong>It needs diversity.</strong> If every sample takes the same path, voting adds nothing. Some current APIs, including Anthropic's, don't accept a temperature setting, so diversity comes from the default sampling or from varying the prompt. And if the model is <em>systematically</em> wrong (it confidently believes a false fact), all five samples agree on the wrong answer. Voting removes noise, not bias.</li>
+  </ul>
+
+  <h2 id="react">ReAct: reasoning interleaved with acting</h2>
+  <p>ReAct (Yao et al., 2022) interleaves three things: a <strong>thought</strong> (reasoning about what to do next), an <strong>action</strong> (a tool call), and an <strong>observation</strong> (the tool's result, written into the context). Thoughts decide actions. Observations ground the next thought in facts the model didn't have. That second half is what CoT can't do.</p>
+  <p>You've already built ReAct. The agent loop from Chapter 03, using the tool protocol from Chapter 04, <em>is</em> ReAct with a structured wire format: the thought is the text (or thinking) before a <code>tool_use</code> block, the action is the <code>tool_use</code> block, and the observation is the <code>tool_result</code> your code sends back.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 760 320" role="img" aria-label="Three panels. Chain-of-thought: one call reasons from question to answer in text. Self-consistency: the same question is sampled five times, giving answers 9, 9, 11, 9 and 3, and a majority vote returns 9. ReAct: thought, tool action, observation from the tool, thought, then the answer.">
+        <defs>
+          <marker id="f0502-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-group" x="10" y="10" width="236" height="262" rx="8"/>
+        <rect class="n-group" x="262" y="10" width="236" height="262" rx="8"/>
+        <rect class="n-group" x="514" y="10" width="236" height="262" rx="8"/>
+        <text class="t-b" x="128" y="30" text-anchor="middle">Chain-of-thought</text>
+        <text class="t-b" x="380" y="30" text-anchor="middle">Self-consistency</text>
+        <text class="t-b" x="632" y="30" text-anchor="middle">ReAct</text>
+
+        <!-- CoT -->
+        <rect class="n-violet" x="30" y="44" width="196" height="28" rx="5"/>
+        <text class="t-sm" x="128" y="62" text-anchor="middle">Q: 23 apples, use 20, buy 6. Left?</text>
+        <line x1="128" y1="72" x2="128" y2="94" marker-end="url(#f0502-ah)"/>
+        <rect class="n-amber" x="30" y="96" width="196" height="28" rx="5"/>
+        <text class="t-mono" x="128" y="114" text-anchor="middle">thought: 23 − 20 = 3</text>
+        <line x1="128" y1="124" x2="128" y2="146" marker-end="url(#f0502-ah)"/>
+        <rect class="n-amber" x="30" y="148" width="196" height="28" rx="5"/>
+        <text class="t-mono" x="128" y="166" text-anchor="middle">thought: 3 + 6 = 9</text>
+        <line x1="128" y1="176" x2="128" y2="198" marker-end="url(#f0502-ah)"/>
+        <rect class="n-accent" x="30" y="200" width="196" height="28" rx="5"/>
+        <text class="t-mono" x="128" y="218" text-anchor="middle">answer: 9</text>
+
+        <!-- Self-consistency -->
+        <rect class="n-violet" x="282" y="44" width="196" height="28" rx="5"/>
+        <text class="t-sm" x="380" y="62" text-anchor="middle">same question, sampled 5 times</text>
+        <line x1="380" y1="72" x2="292" y2="94"/>
+        <line x1="380" y1="72" x2="336" y2="94"/>
+        <line x1="380" y1="72" x2="380" y2="94"/>
+        <line x1="380" y1="72" x2="424" y2="94"/>
+        <line x1="380" y1="72" x2="468" y2="94"/>
+        <rect class="n-amber" x="274" y="96" width="36" height="44" rx="4"/><text class="t-xs" x="292" y="122" text-anchor="middle">CoT</text>
+        <rect class="n-amber" x="318" y="96" width="36" height="44" rx="4"/><text class="t-xs" x="336" y="122" text-anchor="middle">CoT</text>
+        <rect class="n-amber" x="362" y="96" width="36" height="44" rx="4"/><text class="t-xs" x="380" y="122" text-anchor="middle">CoT</text>
+        <rect class="n-amber" x="406" y="96" width="36" height="44" rx="4"/><text class="t-xs" x="424" y="122" text-anchor="middle">CoT</text>
+        <rect class="n-amber" x="450" y="96" width="36" height="44" rx="4"/><text class="t-xs" x="468" y="122" text-anchor="middle">CoT</text>
+        <line x1="292" y1="140" x2="292" y2="156" marker-end="url(#f0502-ah)"/>
+        <line x1="336" y1="140" x2="336" y2="156" marker-end="url(#f0502-ah)"/>
+        <line x1="380" y1="140" x2="380" y2="156" marker-end="url(#f0502-ah)"/>
+        <line x1="424" y1="140" x2="424" y2="156" marker-end="url(#f0502-ah)"/>
+        <line x1="468" y1="140" x2="468" y2="156" marker-end="url(#f0502-ah)"/>
+        <rect class="n-accent" x="274" y="158" width="36" height="24" rx="4"/><text class="t-mono" x="292" y="174" text-anchor="middle">9</text>
+        <rect class="n-accent" x="318" y="158" width="36" height="24" rx="4"/><text class="t-mono" x="336" y="174" text-anchor="middle">9</text>
+        <rect class="n-red" x="362" y="158" width="36" height="24" rx="4"/><text class="t-mono" x="380" y="174" text-anchor="middle">11</text>
+        <rect class="n-accent" x="406" y="158" width="36" height="24" rx="4"/><text class="t-mono" x="424" y="174" text-anchor="middle">9</text>
+        <rect class="n-red" x="450" y="158" width="36" height="24" rx="4"/><text class="t-mono" x="468" y="174" text-anchor="middle">3</text>
+        <line x1="292" y1="182" x2="360" y2="204"/>
+        <line x1="336" y1="182" x2="370" y2="204"/>
+        <line x1="380" y1="182" x2="380" y2="204"/>
+        <line x1="424" y1="182" x2="390" y2="204"/>
+        <line x1="468" y1="182" x2="400" y2="204"/>
+        <rect class="n-accent n-thick" x="300" y="206" width="160" height="28" rx="5"/>
+        <text class="t-mono" x="380" y="224" text-anchor="middle">majority vote → 9</text>
+        <text class="t-xs t-muted" x="380" y="254" text-anchor="middle">3 of 5 agree: confidence 0.6</text>
+
+        <!-- ReAct -->
+        <rect class="n-violet" x="534" y="38" width="196" height="26" rx="5"/>
+        <text class="t-sm" x="632" y="55" text-anchor="middle">Q: who owns billing?</text>
+        <line x1="632" y1="64" x2="632" y2="74" marker-end="url(#f0502-ah)"/>
+        <rect class="n-amber" x="534" y="76" width="196" height="26" rx="5"/>
+        <text class="t-mono" x="632" y="93" text-anchor="middle">thought: need the owner</text>
+        <line x1="632" y1="102" x2="632" y2="112" marker-end="url(#f0502-ah)"/>
+        <rect class="n-plain" x="534" y="114" width="196" height="26" rx="5"/>
+        <text class="t-mono" x="632" y="131" text-anchor="middle">act: owner_of(billing)</text>
+        <line x1="632" y1="140" x2="632" y2="150" marker-end="url(#f0502-ah)"/>
+        <rect class="n-sunken" x="534" y="152" width="196" height="26" rx="5"/>
+        <text class="t-mono" x="632" y="169" text-anchor="middle">obs: payments-team</text>
+        <line x1="632" y1="178" x2="632" y2="188" marker-end="url(#f0502-ah)"/>
+        <rect class="n-amber" x="534" y="190" width="196" height="26" rx="5"/>
+        <text class="t-mono" x="632" y="207" text-anchor="middle">thought: that answers it</text>
+        <line x1="632" y1="216" x2="632" y2="226" marker-end="url(#f0502-ah)"/>
+        <rect class="n-accent" x="534" y="228" width="196" height="26" rx="5"/>
+        <text class="t-mono" x="632" y="245" text-anchor="middle">answer: payments team</text>
+
+        <!-- notes -->
+        <text class="t-sm" x="128" y="294" text-anchor="middle">1 call · reasoning is just text</text>
+        <text class="t-sm t-muted" x="128" y="310" text-anchor="middle">no new facts can enter</text>
+        <text class="t-sm" x="380" y="294" text-anchor="middle">N calls · vote on final answers</text>
+        <text class="t-sm t-muted" x="380" y="310" text-anchor="middle">removes noise, not shared bias</text>
+        <text class="t-sm" x="632" y="294" text-anchor="middle">1 call per step · tools in the loop</text>
+        <text class="t-sm t-muted" x="632" y="310" text-anchor="middle">observations bring in facts</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 5.2</b>Three ways to think. The grey “obs” box in ReAct is the only one written by something other than the model: your code ran the tool and put the result in the context. Self-consistency's 11 and 3 are the scattered mistakes that voting filters out.</figcaption>
+  </figure>
+
+  <p class="code-label">ReAct is the Chapter 03 loop</p>
+<pre><code><span class="k">def</span> react(task, tools, max_steps=<span class="n">10</span>):
+    messages = [{<span class="s">"role"</span>: <span class="s">"user"</span>, <span class="s">"content"</span>: task}]
+    <span class="k">for</span> step <span class="k">in</span> range(max_steps):
+        resp = llm.complete(system=SYSTEM, tools=tools, messages=messages)
+        messages.append({<span class="s">"role"</span>: <span class="s">"assistant"</span>, <span class="s">"content"</span>: resp.content})  <span class="c"># thought + action</span>
+        <span class="k">if</span> resp.stop_reason != <span class="s">"tool_use"</span>:
+            <span class="k">return</span> resp.text
+        results = [run_tool(call) <span class="k">for</span> call <span class="k">in</span> resp.tool_calls]      <span class="c"># your code acts</span>
+        messages.append({<span class="s">"role"</span>: <span class="s">"user"</span>, <span class="s">"content"</span>: results})        <span class="c"># observation</span>
+    <span class="hl"><span class="k">raise</span> StepLimitReached(max_steps)</span></code></pre>
+
+  <div class="cols-2">
+    <div class="card">
+      <p><strong>Why ReAct is the default</strong></p>
+      <ul>
+        <li>Adaptive: every step uses the newest information.</li>
+        <li>Handles surprises (errors, empty results) naturally, because they arrive as observations.</li>
+        <li>Simple: one loop, one prompt, no plan format to parse.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <p><strong>Where ReAct hurts</strong></p>
+      <ul>
+        <li>Greedy: it decides one step at a time and can wander, repeat a call, or loop.</li>
+        <li>Every step re-sends the whole history: the <em>n</em>² growth from Chapter 01.</li>
+        <li>The plan is implicit. Your code can't validate, budget or show it before it runs.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2 id="plan-execute">Plan-and-execute</h2>
+  <p>Plan-and-execute splits ReAct's single role in two. A <strong>planner</strong> call writes the whole plan before anything runs. An <strong>executor</strong> carries out one step at a time. Usually a <strong>replanner</strong> (often the same planner prompt, called again) looks at what has happened and decides whether to keep the plan, revise it, or finish.</p>
+  <p>The single-call ancestor is Plan-and-Solve prompting (Wang et al., 2023): “first understand the problem and devise a plan, then carry out the plan step by step”. It targeted a specific failure of zero-shot CoT, where the model skips a step. The multi-call agent version, with separate planner and executor, became a common open-source agent pattern around the same time.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 290" role="img" aria-label="Plan-and-execute. A task goes to a planner, which writes a four-step plan. The executor takes the next step and runs it. The step result goes to a replanner, which either sends a revised plan back or finishes with an answer.">
+        <defs>
+          <marker id="f0503-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0503-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-violet" x="16" y="70" width="110" height="44" rx="6"/>
+        <text class="t-b" x="71" y="88" text-anchor="middle">task</text>
+        <text class="t-sm" x="71" y="104" text-anchor="middle">compare errors</text>
+        <line x1="126" y1="92" x2="148" y2="92" marker-end="url(#f0503-ah)"/>
+
+        <rect class="n-accent" x="150" y="66" width="120" height="52" rx="6"/>
+        <text class="t-b" x="210" y="88" text-anchor="middle">planner</text>
+        <text class="t-sm t-muted" x="210" y="105" text-anchor="middle">LLM call</text>
+        <text class="t-xs t-muted" x="210" y="136" text-anchor="middle">decides every step</text>
+        <text class="t-xs t-muted" x="210" y="150" text-anchor="middle">before anything has run</text>
+        <line x1="270" y1="92" x2="288" y2="92" marker-end="url(#f0503-ah)"/>
+
+        <rect class="n-plain" x="290" y="20" width="170" height="170" rx="6"/>
+        <text class="t-caps t-muted" x="302" y="40">plan (data)</text>
+        <rect class="n-sunken" x="302" y="52" width="146" height="26" rx="4"/>
+        <text class="t-mono" x="312" y="69">1 errors(auth)</text>
+        <rect class="n-sunken" x="302" y="84" width="146" height="26" rx="4"/>
+        <text class="t-mono" x="312" y="101">2 errors(billing)</text>
+        <rect class="n-sunken" x="302" y="116" width="146" height="26" rx="4"/>
+        <text class="t-mono" x="312" y="133">3 errors(search)</text>
+        <rect class="n-sunken" x="302" y="148" width="146" height="26" rx="4"/>
+        <text class="t-mono" x="312" y="165">4 compare, owner</text>
+
+        <line x1="460" y1="65" x2="518" y2="65" marker-end="url(#f0503-ah)"/>
+        <text class="t-sm" x="489" y="58" text-anchor="middle">next step</text>
+        <rect class="n-amber" x="520" y="40" width="180" height="50" rx="6"/>
+        <text class="t-b" x="610" y="61" text-anchor="middle">executor</text>
+        <text class="t-sm" x="610" y="78" text-anchor="middle">runs one step (tools)</text>
+
+        <line x1="610" y1="90" x2="610" y2="146" marker-end="url(#f0503-ah)"/>
+        <text class="t-sm" x="618" y="122">step result</text>
+        <rect class="n-accent" x="520" y="148" width="180" height="50" rx="6"/>
+        <text class="t-b" x="610" y="169" text-anchor="middle">replanner</text>
+        <text class="t-sm" x="610" y="186" text-anchor="middle">keep, revise, or finish</text>
+
+        <line class="e-accent" x1="520" y1="176" x2="462" y2="176" marker-end="url(#f0503-aha)"/>
+        <text class="t-sm t-accent" x="490" y="168" text-anchor="middle">revise</text>
+
+        <line x1="610" y1="198" x2="610" y2="236" marker-end="url(#f0503-ah)"/>
+        <text class="t-sm" x="618" y="222">done</text>
+        <rect class="n-plain" x="520" y="238" width="180" height="34" rx="6"/>
+        <text class="t-b" x="610" y="260" text-anchor="middle">answer</text>
+
+        <text class="t-sm t-muted" x="16" y="232">The planner can be a strong model and the executor a cheaper one.</text>
+        <text class="t-sm t-muted" x="16" y="250">Replanning after each step costs a call, but it catches surprises.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 5.3</b>Plan-and-execute. The plan in the middle is <em>data your code holds</em>, not tokens in a model's context. That is the pattern's real advantage: your code can check it, count it, show it to a person, and decide which steps can run at the same time.</figcaption>
+  </figure>
+
+  <p class="code-label">Plan-and-execute, with the limits your harness owns</p>
+<pre><code><span class="k">def</span> plan_and_execute(task, max_steps=<span class="n">8</span>, max_replans=<span class="n">3</span>):
+    plan = validate(planner.make_plan(task))      <span class="c"># LLM call → list of steps; check it before running</span>
+    done = []                                     <span class="c"># (step, result) pairs</span>
+    replans = <span class="n">0</span>
+    <span class="k">while</span> plan:
+        <span class="k">if</span> len(done) &gt;= max_steps:
+            <span class="k">raise</span> StepLimitReached(max_steps)
+        step = plan.pop(<span class="n">0</span>)
+        result = executor.run(step, context=done)   <span class="c"># a tool call, or a small ReAct loop</span>
+        done.append((step, result))
+        decision = planner.replan(task, done, plan)  <span class="c"># LLM call: keep / revise / finish</span>
+        <span class="k">if</span> decision.kind == <span class="s">"finish"</span>:
+            <span class="k">return</span> decision.answer
+        <span class="k">if</span> decision.kind == <span class="s">"revise"</span>:
+            replans += <span class="n">1</span>
+            <span class="hl"><span class="k">if</span> replans &gt; max_replans: <span class="k">raise</span> ReplanLimitReached()</span>
+            plan = validate(decision.plan)
+    <span class="k">return</span> planner.summarize(task, done)</code></pre>
+
+  <p>Read the code for what it gives you and what it costs:</p>
+  <ul>
+    <li><strong>The executor sees less.</strong> Each step gets the step and the results it needs, not the whole transcript. Smaller contexts per call are cheaper and easier for the model to use well (Chapter 06).</li>
+    <li><strong>The planner works with the least information.</strong> It commits to steps before any tool has run. Plans go stale the moment reality disagrees. Replanning fixes that but adds a model call each time it runs.</li>
+    <li><strong>Every limit is in your code.</strong> <code>max_steps</code>, <code>max_replans</code> and <code>validate</code> don't depend on the model behaving. A planner that keeps revising forever is a known failure. Without <code>max_replans</code>, nothing stops it.</li>
+  </ul>
+
+  <h2 id="rewoo" data-short="ReWOO and LLMCompiler">ReWOO and LLMCompiler: plans with placeholders</h2>
+  <p>Look at where ReAct spends tokens. After every tool result it calls the model again, and every call re-sends the instructions, the tool definitions, and every earlier observation. Most of those tokens are repeats. <strong>ReWOO</strong> (“Reasoning WithOut Observation”, Xu et al., 2023) removes the repeats by planning the whole tool chain at once, <em>before</em> any result exists. The planner writes <strong>evidence variables</strong> (<code>#E1</code>, <code>#E2</code>, …) as placeholders for results it hasn't seen.</p>
+  <dl class="defs">
+    <dt>Planner</dt><dd>One LLM call. Writes the plan: each step names a tool, its input, and the variable that will hold its result. Later steps can refer to earlier variables.</dd>
+    <dt>Worker</dt><dd>Plain code, no reasoning between steps. Runs each tool in order, substituting earlier results into later inputs.</dd>
+    <dt>Solver</dt><dd>One LLM call. Reads the task, the plan and all the evidence, and writes the answer.</dd>
+  </dl>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 760 356" role="img" aria-label="ReWOO. The planner, LLM call 1, writes a plan with evidence variables E1 to E6. A worker runs the tools and fills the variables. The solver, LLM call 2, writes the answer. Below, bars compare tokens sent to the model: ReAct sends 12.5 thousand over 5 calls, ReWOO sends 5.3 thousand over 2 calls.">
+        <defs>
+          <marker id="f0504-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-accent" x="16" y="60" width="120" height="56" rx="6"/>
+        <text class="t-b" x="76" y="84" text-anchor="middle">Planner</text>
+        <text class="t-sm t-muted" x="76" y="101" text-anchor="middle">LLM call 1</text>
+        <line x1="136" y1="88" x2="164" y2="88" marker-end="url(#f0504-ah)"/>
+
+        <rect class="n-plain" x="166" y="18" width="250" height="150" rx="6"/>
+        <text class="t-mono" x="178" y="40">#E1 = Metrics[auth]</text>
+        <text class="t-mono" x="178" y="60">#E2 = Metrics[billing]</text>
+        <text class="t-mono" x="178" y="80">#E3 = Metrics[search]</text>
+        <text class="t-mono" x="178" y="100">#E4 = Owner[auth]</text>
+        <text class="t-mono" x="178" y="120">#E5 = Owner[billing]</text>
+        <text class="t-mono" x="178" y="140">#E6 = Owner[search]</text>
+        <text class="t-xs t-amber" x="178" y="159">can't branch on results: fetches all 3 owners</text>
+        <line x1="416" y1="88" x2="444" y2="88" marker-end="url(#f0504-ah)"/>
+
+        <rect class="n-amber" x="446" y="60" width="130" height="56" rx="6"/>
+        <text class="t-b" x="511" y="84" text-anchor="middle">Worker</text>
+        <text class="t-sm" x="511" y="101" text-anchor="middle">runs tools, fills #E</text>
+        <text class="t-xs t-muted" x="511" y="134" text-anchor="middle">no LLM between tools</text>
+        <line x1="576" y1="88" x2="604" y2="88" marker-end="url(#f0504-ah)"/>
+
+        <rect class="n-accent" x="606" y="60" width="130" height="56" rx="6"/>
+        <text class="t-b" x="671" y="84" text-anchor="middle">Solver</text>
+        <text class="t-sm t-muted" x="671" y="101" text-anchor="middle">LLM call 2</text>
+        <line x1="671" y1="116" x2="671" y2="144" marker-end="url(#f0504-ah)"/>
+        <rect class="n-plain" x="606" y="146" width="130" height="28" rx="5"/>
+        <text class="t-b" x="671" y="165" text-anchor="middle">answer</text>
+
+        <line class="e-line" x1="16" y1="196" x2="744" y2="196"/>
+        <text class="t-b" x="16" y="220">Input tokens sent to the model for the same task (illustrative, to scale)</text>
+
+        <text class="t-b" x="16" y="251">ReAct</text>
+        <rect class="fill-amber" x="110" y="234" width="58" height="24" rx="2"/>
+        <rect class="fill-amber" x="170" y="234" width="78" height="24" rx="2"/>
+        <rect class="fill-amber" x="250" y="234" width="98" height="24" rx="2"/>
+        <rect class="fill-amber" x="350" y="234" width="118" height="24" rx="2"/>
+        <rect class="fill-amber" x="470" y="234" width="138" height="24" rx="2"/>
+        <text class="t-sm" x="620" y="251">12.5K · 5 calls</text>
+        <text class="t-xs t-muted" x="139" y="272" text-anchor="middle">1.5K</text>
+        <text class="t-xs t-muted" x="209" y="272" text-anchor="middle">2.0K</text>
+        <text class="t-xs t-muted" x="299" y="272" text-anchor="middle">2.5K</text>
+        <text class="t-xs t-muted" x="409" y="272" text-anchor="middle">3.0K</text>
+        <text class="t-xs t-muted" x="539" y="272" text-anchor="middle">3.5K</text>
+
+        <text class="t-b" x="16" y="305">ReWOO</text>
+        <rect class="fill-accent" x="110" y="288" width="58" height="24" rx="2"/>
+        <rect class="fill-accent" x="170" y="288" width="150" height="24" rx="2"/>
+        <text class="t-sm" x="332" y="305">5.3K · 2 calls</text>
+        <text class="t-xs t-muted" x="139" y="326" text-anchor="middle">plan 1.5K</text>
+        <text class="t-xs t-muted" x="245" y="326" text-anchor="middle">solve 3.8K</text>
+
+        <text class="t-xs t-muted" x="16" y="348">Assumes a 1.5K prefix and 0.5K per tool result. Solver: 0.5K prompt + 0.3K plan + 3.0K evidence, no tool definitions.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 5.4</b>ReWOO's planner, worker and solver. ReAct re-sends its prefix and every earlier observation on each of its five calls. ReWOO sends the prefix once and each observation once. The price is in the plan box: the planner can't see that billing is the worst service, so it fetches all three owners.</figcaption>
+  </figure>
+
+  <p>The numbers in Figure 5.4 are made up but the shape isn't. On HotpotQA, the ReWOO authors report roughly five times fewer tokens than a ReAct-style baseline, with a small accuracy gain. Where the saving comes from:</p>
+  <ul>
+    <li><strong>The prefix is sent twice, not once per step.</strong> Instructions, examples and tool definitions are often the biggest part of a ReAct call.</li>
+    <li><strong>Each observation is sent once</strong>, to the solver, instead of being re-sent on every later step. This removes the <em>n</em>² term from Chapter 01.</li>
+    <li><strong>Only two calls produce output tokens</strong>, and there are no “thought” turns between tools.</li>
+  </ul>
+  <p>The cost is adaptivity. The plan is fixed before any evidence exists. If <code>Metrics[billing]</code> times out, the worker can't ask the model what to do. The solver receives <code>#E2 = error: timeout</code> and must answer with a gap. Adding a “replan on failure” step fixes this, and moves you back toward plan-and-execute.</p>
+
+  <p class="code-label">ReWOO: two model calls, plain code in between</p>
+<pre><code><span class="k">def</span> rewoo(task):
+    plan = llm.complete(system=PLANNER_PROMPT, tools=TOOL_DOCS,       <span class="c"># call 1</span>
+                        messages=[user(task)])
+    steps = parse_plan(plan.text)          <span class="c"># [("E1", "Metrics", "auth"), ...] → validate it</span>
+    evidence = {}
+    <span class="k">for</span> var, tool, arg <span class="k">in</span> steps:           <span class="c"># the worker: no LLM in this loop</span>
+        arg = substitute(arg, evidence)     <span class="c"># "#E2" → the earlier result</span>
+        evidence[var] = run_tool_safely(tool, arg)   <span class="c"># errors become evidence, not crashes</span>
+    <span class="hl"><span class="k">return</span> llm.complete(system=SOLVER_PROMPT,</span>                      <span class="c"># call 2</span>
+                        messages=[user(task, plan.text, evidence)]).text</code></pre>
+
+  <h3>LLMCompiler: the plan as a dependency graph</h3>
+  <p>ReWOO's worker runs steps one after another. <strong>LLMCompiler</strong> (Kim et al., 2023) borrows an idea from compilers: if two instructions don't depend on each other, run them at the same time. Its planner emits tasks with explicit dependencies, which form a DAG (directed acyclic graph). A <strong>task-fetching unit</strong> dispatches every task whose inputs are ready, in parallel. A <strong>joiner</strong> (an LLM call) then decides whether to answer or to replan.</p>
+<pre><code><span class="c"># planner output: each task lists the tasks it depends on</span>
+<span class="n">1</span>. error_count(<span class="s">"auth"</span>)                       <span class="c"># deps: none   ┐</span>
+<span class="n">2</span>. error_count(<span class="s">"billing"</span>)                    <span class="c"># deps: none   ├ wave 1, in parallel</span>
+<span class="n">3</span>. error_count(<span class="s">"search"</span>)                     <span class="c"># deps: none   ┘</span>
+<span class="n">4</span>. pick_max($<span class="n">1</span>, $<span class="n">2</span>, $<span class="n">3</span>)                      <span class="c"># deps: 1,2,3  · wave 2</span>
+<span class="n">5</span>. owner_of($<span class="n">4</span>)                              <span class="c"># deps: 4      · wave 3</span></code></pre>
+  <p>Five steps, three waves. Wall-clock time drops from the sum of all the tool latencies to the sum of the slowest tool in each wave. The paper reports large latency and cost reductions against ReAct on tasks with independent sub-steps. On tasks where every step depends on the previous one, a DAG has nothing to parallelize.</p>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p>ReWOO and LLMCompiler move the plan out of the model's context and into a data structure. Once the plan is data, ordinary engineering applies: validation, dependency analysis, parallel scheduling, retries per step. This is exactly the move your swarm harness makes when a planner returns child tasks for your code to schedule.</p>
+  </div>
+
+  <h2 id="compare" data-short="Same task, two patterns">Same task, two patterns</h2>
+  <p>Here is the Predict-question task run both ways. Read the two traces for <em>who decides what happens next</em> at each row.</p>
+
+  <div class="trace">
+    <div class="trace-title">ReAct · 5 model calls, one after another</div>
+    <div class="tr tr-user"><div class="tr-role">user</div><div class="tr-body">Which of auth, billing and search had the most errors yesterday, and who owns it?</div></div>
+    <div class="tr tr-think"><div class="tr-role">1 think</div><div class="tr-body">I'll check each service. Start with auth.</div></div>
+    <div class="tr tr-act"><div class="tr-role">act</div><div class="tr-body">error_count(service="auth", day="yesterday")</div></div>
+    <div class="tr tr-obs"><div class="tr-role">obs</div><div class="tr-body">1204</div></div>
+    <div class="tr tr-think"><div class="tr-role">2 think</div><div class="tr-body">Now billing.</div></div>
+    <div class="tr tr-act"><div class="tr-role">act</div><div class="tr-body">error_count(service="billing", day="yesterday")</div></div>
+    <div class="tr tr-obs"><div class="tr-role">obs</div><div class="tr-body">3877</div></div>
+    <div class="tr tr-think"><div class="tr-role">3 think</div><div class="tr-body">Now search.</div></div>
+    <div class="tr tr-act"><div class="tr-role">act</div><div class="tr-body">error_count(service="search", day="yesterday")</div></div>
+    <div class="tr tr-obs"><div class="tr-role">obs</div><div class="tr-body">612</div></div>
+    <div class="tr tr-think"><div class="tr-role">4 think</div><div class="tr-body">Billing is highest. Find its owner.</div></div>
+    <div class="tr tr-act"><div class="tr-role">act</div><div class="tr-body">owner_of(service="billing")</div></div>
+    <div class="tr tr-obs"><div class="tr-role">obs</div><div class="tr-body">"payments-team"</div></div>
+    <div class="tr tr-final"><div class="tr-role">5 answer</div><div class="tr-body">Billing had the most errors yesterday (3,877, against 1,204 for auth and 612 for search). It's owned by the payments team.</div></div>
+  </div>
+
+  <div class="trace">
+    <div class="trace-title">Plan-and-execute · 3 model calls, tools in two waves</div>
+    <div class="tr tr-user"><div class="tr-role">user</div><div class="tr-body">Which of auth, billing and search had the most errors yesterday, and who owns it?</div></div>
+    <div class="tr tr-think"><div class="tr-role">1 plan</div><div class="tr-body">1. error_count(auth)      deps: none
+2. error_count(billing)   deps: none
+3. error_count(search)    deps: none
+4. pick the highest of 1–3
+5. owner_of(result of 4)</div></div>
+    <div class="tr tr-sys"><div class="tr-role">harness</div><div class="tr-body">Plan valid: 5 steps (limit 8), all tools exist. Steps 1–3 have no dependencies, so they run concurrently.</div></div>
+    <div class="tr tr-act"><div class="tr-role">act ×3</div><div class="tr-body">error_count(auth) · error_count(billing) · error_count(search)</div></div>
+    <div class="tr tr-obs"><div class="tr-role">obs</div><div class="tr-body">1204 · 3877 · 612</div></div>
+    <div class="tr tr-think"><div class="tr-role">2 replan</div><div class="tr-body">Step 4: billing is highest. Plan still holds. Run step 5 with service="billing".</div></div>
+    <div class="tr tr-act"><div class="tr-role">act</div><div class="tr-body">owner_of(service="billing")</div></div>
+    <div class="tr tr-obs"><div class="tr-role">obs</div><div class="tr-body">"payments-team"</div></div>
+    <div class="tr tr-final"><div class="tr-role">3 answer</div><div class="tr-body">Billing had the most errors yesterday (3,877, against 1,204 for auth and 612 for search). It's owned by the payments team.</div></div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th></th><th>ReAct</th><th>Plan-and-execute</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Model calls</strong></td><td>5</td><td>3 (plan, replan, answer)</td></tr>
+        <tr><td><strong>Tool round trips on the critical path</strong></td><td>4, sequential</td><td>2 waves</td></tr>
+        <tr><td><strong>History per call</strong></td><td>Everything so far, growing each step</td><td>Plan plus the results each call needs</td></tr>
+        <tr><td><strong>What your code can check before tools run</strong></td><td>Only the next tool call</td><td>The whole plan: length, tools, dependencies</td></tr>
+        <tr><td><strong>If billing times out</strong></td><td>Call 3 sees the error as an observation and can retry or skip. Adapting is free.</td><td>The replanner sees the failure and revises. This works only because there <em>is</em> a replanner. Pure ReWOO would hand the gap to the solver.</td></tr>
+        <tr><td><strong>If the task changes shape midway</strong></td><td>Handles it naturally</td><td>Needs a replan, and the planner may over-commit to the old shape</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="box note">
+    <span class="box-label">The gap is narrower than it looks</span>
+    <p>With parallel tool calls (Chapter 04), a ReAct model can ask for all three <code>error_count</code> calls in one response, which brings it down to three model calls. So call counts aren't the lasting difference. These are: <strong>where the plan lives</strong> (the model's context vs your data structures), and <strong>who decides what runs in parallel</strong> (the model, when it happens to batch calls, vs your scheduler, from declared dependencies).</p>
+  </div>
+
+  <h2 id="reflection" data-short="Self-Refine and Reflexion">Think, check, retry: Self-Refine and Reflexion</h2>
+  <p>The patterns so far make one attempt. The next family makes an attempt, gets feedback on it, and tries again. They differ in <em>where the feedback comes from</em>, and that turns out to be the whole story.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 760 276" role="img" aria-label="Left, Self-Refine: generate a draft, the same model gives feedback, refine, and loop back with the new draft until no issues are left. Right, Reflexion: an actor attempts the task, an evaluator checks it. On pass, done. On fail, a reflection step writes a lesson into memory, and the actor reads the lessons on the next attempt.">
+        <defs>
+          <marker id="f0505-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0505-ahv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-violet" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0505-ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-red" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <line class="e-line" x1="380" y1="16" x2="380" y2="266"/>
+
+        <!-- Self-Refine -->
+        <text class="t-b" x="20" y="30">Self-Refine · one task, polished</text>
+        <rect class="n-plain" x="20" y="60" width="100" height="44" rx="6"/>
+        <text class="t-b" x="70" y="79" text-anchor="middle">generate</text>
+        <text class="t-sm t-muted" x="70" y="95" text-anchor="middle">first draft</text>
+        <line x1="120" y1="82" x2="138" y2="82" marker-end="url(#f0505-ah)"/>
+        <rect class="n-amber" x="140" y="60" width="100" height="44" rx="6"/>
+        <text class="t-b" x="190" y="79" text-anchor="middle">feedback</text>
+        <text class="t-sm" x="190" y="95" text-anchor="middle">self-critique</text>
+        <line x1="240" y1="82" x2="258" y2="82" marker-end="url(#f0505-ah)"/>
+        <rect class="n-accent" x="260" y="60" width="100" height="44" rx="6"/>
+        <text class="t-b" x="310" y="79" text-anchor="middle">refine</text>
+        <text class="t-sm" x="310" y="95" text-anchor="middle">rewrite draft</text>
+        <path d="M310,104 V132 H200 V106" marker-end="url(#f0505-ah)"/>
+        <text class="t-xs" x="255" y="146" text-anchor="middle">next draft</text>
+        <line x1="160" y1="104" x2="160" y2="182" marker-end="url(#f0505-ah)"/>
+        <text class="t-xs" x="166" y="164">no issues left</text>
+        <rect class="n-plain" x="110" y="184" width="140" height="30" rx="6"/>
+        <text class="t-b" x="180" y="204" text-anchor="middle">final output</text>
+        <text class="t-sm" x="20" y="242">Signal: the same model's own critique.</text>
+        <text class="t-sm t-muted" x="20" y="258">Cheap, but blind to errors it can't see.</text>
+
+        <!-- Reflexion -->
+        <text class="t-b" x="400" y="30">Reflexion · many attempts, learns</text>
+        <rect class="n-plain" x="396" y="60" width="96" height="44" rx="6"/>
+        <text class="t-b" x="444" y="79" text-anchor="middle">actor</text>
+        <text class="t-sm t-muted" x="444" y="95" text-anchor="middle">attempt task</text>
+        <line x1="492" y1="82" x2="528" y2="82" marker-end="url(#f0505-ah)"/>
+        <rect class="n-amber" x="530" y="60" width="100" height="44" rx="6"/>
+        <text class="t-b" x="580" y="79" text-anchor="middle">evaluator</text>
+        <text class="t-sm" x="580" y="95" text-anchor="middle">tests, checks</text>
+        <line x1="630" y1="82" x2="658" y2="82" marker-end="url(#f0505-ah)"/>
+        <text class="t-xs" x="644" y="74" text-anchor="middle">pass</text>
+        <rect class="n-accent" x="660" y="60" width="86" height="44" rx="6"/>
+        <text class="t-b" x="703" y="86" text-anchor="middle">done</text>
+
+        <line class="e-red" x1="580" y1="104" x2="580" y2="148" marker-end="url(#f0505-ahr)"/>
+        <text class="t-xs t-red" x="586" y="130">fail</text>
+        <rect class="n-violet" x="530" y="150" width="100" height="44" rx="6"/>
+        <text class="t-b" x="580" y="169" text-anchor="middle">reflect</text>
+        <text class="t-sm" x="580" y="185" text-anchor="middle">write a lesson</text>
+        <line class="e-violet" x1="530" y1="172" x2="494" y2="172" marker-end="url(#f0505-ahv)"/>
+        <text class="t-xs t-violet" x="511" y="164" text-anchor="middle">lesson</text>
+        <rect class="n-sunken" x="396" y="150" width="96" height="44" rx="6"/>
+        <text class="t-b" x="444" y="169" text-anchor="middle">memory</text>
+        <text class="t-sm t-muted" x="444" y="185" text-anchor="middle">past lessons</text>
+        <line class="e-violet" x1="444" y1="150" x2="444" y2="106" marker-end="url(#f0505-ahv)"/>
+        <text class="t-xs t-violet" x="450" y="132">read next try</text>
+        <text class="t-sm" x="400" y="242">Signal: an external check (tests, a grader).</text>
+        <text class="t-sm t-muted" x="400" y="258">Lessons persist across attempts.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 5.5</b>Two feedback loops. Self-Refine polishes one output using the model's own critique. Reflexion retries a whole task, and between attempts it turns an external failure signal into a written lesson. The violet path is memory, which Chapter 07 develops.</figcaption>
+  </figure>
+
+  <h3>Self-Refine</h3>
+  <p>Self-Refine (Madaan et al., 2023) uses one model in three roles: write a draft, critique it, rewrite it using the critique. Repeat until the critique finds nothing or an iteration limit hits. There is no training and no tool. It works best when the model can <em>recognize</em> a problem it didn't avoid the first time: missing constraints (“include all five keywords”), tone, readability, an obviously incomplete answer.</p>
+
+  <h3>Reflexion</h3>
+  <p>Reflexion (Shinn et al., 2023) works across whole attempts. An <strong>actor</strong> (often a ReAct agent) tries the task. An <strong>evaluator</strong> produces a signal: unit tests passing or failing, an environment's success flag, or a grader's score. On failure, a <strong>self-reflection</strong> call turns the trajectory and the signal into a short lesson in plain language, such as “I assumed the input was sorted. Check first.” The lesson goes into a memory buffer that the actor reads on the next attempt. The authors call this “verbal reinforcement learning”: the agent improves through its context, not its weights.</p>
+
+  <p class="code-label">Reflexion: the evaluator is the part that matters</p>
+<pre><code><span class="k">def</span> reflexion(task, max_attempts=<span class="n">3</span>):
+    lessons = []                                    <span class="c"># episodic memory for this task</span>
+    <span class="k">for</span> attempt <span class="k">in</span> range(max_attempts):
+        result = actor.run(task, lessons=lessons)    <span class="c"># e.g. a ReAct loop</span>
+        <span class="hl">verdict = evaluate(task, result)</span>             <span class="c"># tests, schema check, a grader</span>
+        <span class="k">if</span> verdict.passed:
+            <span class="k">return</span> result
+        lesson = llm.complete(messages=[user(
+            reflect_prompt(task, result.trajectory, verdict.feedback))]).text
+        lessons.append(lesson)
+    <span class="k">raise</span> AttemptsExhausted(lessons)              <span class="c"># the lessons are useful in the error report</span></code></pre>
+
+  <div class="box pitfall">
+    <span class="box-label">Pitfall · a critic with no new information</span>
+    <p>Huang et al. (2023) tested models correcting their own reasoning with no external feedback. Accuracy often didn't improve and sometimes dropped: the model “corrected” right answers into wrong ones. The pattern works when the feedback carries information the first attempt lacked. Strong signals: a failing test, a compiler error, a schema validator, a tool result, a different model, a person. Weak signal: “Are you sure? Check your answer.” <strong>A reflection loop is only as good as its evaluator.</strong></p>
+  </div>
+
+  <h2 id="search" data-short="Tree search">Search: Tree of Thoughts and LATS</h2>
+  <p>CoT follows one line of reasoning. If an early step is wrong, everything after it is wasted. <strong>Tree of Thoughts</strong> (ToT, Yao et al., 2023) treats reasoning as a search problem. A <em>thought</em> is one coherent intermediate step. The harness asks the model to propose several next thoughts from a state, asks the model to judge how promising each resulting state is, keeps the best, and backtracks when a branch dies.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 326" role="img" aria-label="Tree of Thoughts on the Game of 24 with input 4, 9, 10, 13. Three first thoughts: 4 plus 9 is judged impossible and pruned; 13 minus 9 is judged likely; 10 minus 4 is judged maybe and kept in reserve. Under 13 minus 9, the thought 10 minus 4 is judged sure, and 4 plus 4 is pruned. The sure branch reaches 4 times 6 equals 24.">
+        <defs>
+          <marker id="f0506-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0506-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0506-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-plain n-thick" x="290" y="16" width="140" height="34" rx="6"/>
+        <text class="t-mono" x="360" y="38" text-anchor="middle">4  9  10  13</text>
+        <text class="t-xs t-muted" x="440" y="37">make 24 with + − × ÷</text>
+
+        <line class="e-muted" x1="330" y1="50" x2="122" y2="82" marker-end="url(#f0506-ahm)"/>
+        <line class="e-accent" x1="360" y1="50" x2="360" y2="82" marker-end="url(#f0506-aha)"/>
+        <line class="e-muted" x1="390" y1="50" x2="598" y2="82" marker-end="url(#f0506-ahm)"/>
+
+        <rect class="n-ghost" x="40" y="84" width="164" height="44" rx="6"/>
+        <text class="t-mono t-muted" x="122" y="102" text-anchor="middle">4 + 9 = 13</text>
+        <text class="t-sm t-red" x="122" y="119" text-anchor="middle">left 10 13 13 · impossible</text>
+        <text class="t-xs t-red" x="122" y="144" text-anchor="middle">pruned</text>
+
+        <rect class="n-accent" x="278" y="84" width="164" height="44" rx="6"/>
+        <text class="t-mono" x="360" y="102" text-anchor="middle">13 − 9 = 4</text>
+        <text class="t-sm" x="360" y="119" text-anchor="middle">left 4 4 10 · likely</text>
+
+        <rect class="n-plain" x="516" y="84" width="164" height="44" rx="6"/>
+        <text class="t-mono" x="598" y="102" text-anchor="middle">4 × 9 = 36</text>
+        <text class="t-sm" x="598" y="119" text-anchor="middle">left 10 13 36 · maybe</text>
+
+        <line class="e-accent" x1="340" y1="128" x2="280" y2="166" marker-end="url(#f0506-aha)"/>
+        <line class="e-muted" x1="380" y1="128" x2="470" y2="166" marker-end="url(#f0506-ahm)"/>
+        <line class="e-muted e-dash" x1="610" y1="128" x2="630" y2="166" marker-end="url(#f0506-ahm)"/>
+
+        <rect class="n-accent" x="205" y="168" width="150" height="44" rx="6"/>
+        <text class="t-mono" x="280" y="186" text-anchor="middle">10 − 4 = 6</text>
+        <text class="t-sm" x="280" y="203" text-anchor="middle">left 4 6 · sure</text>
+
+        <rect class="n-ghost" x="395" y="168" width="150" height="44" rx="6"/>
+        <text class="t-mono t-muted" x="470" y="186" text-anchor="middle">4 + 4 = 8</text>
+        <text class="t-sm t-red" x="470" y="203" text-anchor="middle">left 8 10 · impossible</text>
+        <text class="t-xs t-red" x="470" y="228" text-anchor="middle">pruned</text>
+
+        <rect class="n-ghost" x="560" y="168" width="140" height="44" rx="6"/>
+        <text class="t-sm t-muted" x="630" y="186" text-anchor="middle">not expanded</text>
+        <text class="t-sm t-muted" x="630" y="203" text-anchor="middle">kept as a fallback</text>
+
+        <line class="e-accent" x1="280" y1="212" x2="280" y2="250" marker-end="url(#f0506-aha)"/>
+        <rect class="n-accent n-thick" x="205" y="252" width="150" height="34" rx="6"/>
+        <text class="t-mono t-b" x="280" y="274" text-anchor="middle">4 × 6 = 24 ✓</text>
+
+        <text class="t-sm t-b" x="20" y="186">the search loop</text>
+        <text class="t-sm" x="20" y="204">1 propose k thoughts</text>
+        <text class="t-sm" x="20" y="222">2 score each state</text>
+        <text class="t-sm" x="20" y="240">3 keep the best, prune</text>
+        <text class="t-sm" x="20" y="258">4 backtrack on dead ends</text>
+
+        <rect class="n-sunken" x="420" y="250" width="290" height="66" rx="6"/>
+        <text class="t-b" x="432" y="270">LATS adds</text>
+        <text class="t-sm" x="432" y="288">real environment steps and reflections,</text>
+        <text class="t-sm" x="432" y="304">with values backed up the tree (MCTS)</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 5.6</b>Tree of Thoughts on the Game of 24. Each label (“impossible”, “likely”, “sure”) is a separate model call judging a state. The judge is fallible: “maybe” branches are kept in reserve so the search can come back to them if the best branch dies.</figcaption>
+  </figure>
+
+  <p>ToT has four parts you choose: how to split the problem into thought steps, how to <strong>propose</strong> candidates, how to <strong>evaluate</strong> states (a value label like sure/likely/impossible, or a vote between states), and the <strong>search algorithm</strong> (breadth-first keeping the best <em>b</em> per level, or depth-first with backtracking). On the Game of 24, the paper reports GPT-4 with CoT solving 4% of problems and ToT solving 74%.</p>
+
+  <p class="code-label">ToT as beam search: count the calls</p>
+<pre><code><span class="k">def</span> tot_beam(problem, depth=<span class="n">3</span>, k=<span class="n">5</span>, beam=<span class="n">2</span>):
+    frontier = [State(problem)]
+    <span class="k">for</span> level <span class="k">in</span> range(depth):
+        candidates = [s.extend(t) <span class="k">for</span> s <span class="k">in</span> frontier
+                                  <span class="k">for</span> t <span class="k">in</span> propose(s, k)]   <span class="c"># 1 call per state, k thoughts back</span>
+        scored = [(value(c), c) <span class="k">for</span> c <span class="k">in</span> candidates]           <span class="c"># 1 judge call per candidate</span>
+        scored = [(v, c) <span class="k">for</span> v, c <span class="k">in</span> scored <span class="k">if</span> v &gt; IMPOSSIBLE]
+        frontier = [c <span class="k">for</span> v, c <span class="k">in</span> sorted(scored, key=by_value, reverse=<span class="k">True</span>)[:beam]]
+        <span class="k">for</span> s <span class="k">in</span> frontier:
+            <span class="k">if</span> s.is_solution():
+                <span class="k">return</span> s
+    <span class="k">return</span> <span class="k">None</span></code></pre>
+  <p>Count it: level 1 costs 1 proposal and 5 judgments; levels 2 and 3 cost 2 proposals and 10 judgments each. That's <strong>about 30 model calls</strong> where CoT makes one. ToT is for problems where intermediate states can be judged and a wrong early step is expensive: puzzles, constrained planning, some code search. It's almost never worth it for a chat reply.</p>
+
+  <h3>LATS: search over real actions</h3>
+  <p>Language Agent Tree Search (Zhou et al., 2023) combines ReAct, Reflexion and ToT using Monte Carlo tree search (MCTS). Nodes are agent states. Expanding a node means <em>actually taking an action in the environment</em> and observing the result. Each new state gets a value, from an LLM's score and from environment feedback such as whether tests pass. Values are backed up the tree, so promising branches get explored more. Failed trajectories produce reflections that guide later expansions.</p>
+  <p>That design has a hard requirement: <strong>the environment must be reversible.</strong> To try a sibling branch, the harness has to return to an earlier state. Re-running a search query or resetting a sandbox works. Sending an email, charging a card or deleting a file can't be undone. LATS fits simulated web environments, code with tests, and question answering. It doesn't fit side effects in the real world.</p>
+
+  <h2 id="thinking" data-short="Native thinking">What native thinking models change</h2>
+  <p>Since 2024, frontier models have been trained, largely with reinforcement learning, to produce a long reasoning trace before they answer. OpenAI's o1 (2024) was the first widely known example. DeepSeek-R1 (2025) published a training recipe. Anthropic's models expose the same idea as <em>extended</em> or <em>adaptive thinking</em>. In practice, chain-of-thought has moved inside the call, into a dedicated content block.</p>
+
+  <p class="code-label">Request (Messages API shape)</p>
+<pre><code>{
+  <span class="s">"model"</span>: <span class="s">"claude-opus-5-5"</span>,
+  <span class="s">"max_tokens"</span>: <span class="n">16000</span>,
+  <span class="hl"><span class="s">"thinking"</span>: { <span class="s">"type"</span>: <span class="s">"adaptive"</span> }</span>,
+  <span class="s">"output_config"</span>: { <span class="s">"effort"</span>: <span class="s">"medium"</span> },
+  <span class="s">"tools"</span>: [ <span class="c">…</span> ],
+  <span class="s">"messages"</span>: [ <span class="c">…</span> ]
+}</code></pre>
+
+  <p class="code-label">Response</p>
+<pre><code>{
+  <span class="s">"content"</span>: [
+    { <span class="s">"type"</span>: <span class="s">"thinking"</span>, <span class="s">"thinking"</span>: <span class="s">"…"</span>, <span class="s">"signature"</span>: <span class="s">"EqQBCg…"</span> },
+    { <span class="s">"type"</span>: <span class="s">"text"</span>, <span class="s">"text"</span>: <span class="s">"I'll check all three services at once."</span> },
+    { <span class="s">"type"</span>: <span class="s">"tool_use"</span>, <span class="s">"id"</span>: <span class="s">"toolu_01…"</span>, <span class="s">"name"</span>: <span class="s">"error_count"</span>, <span class="s">"input"</span>: { <span class="s">"service"</span>: <span class="s">"auth"</span> } },
+    <span class="c">…two more tool_use blocks…</span>
+  ],
+  <span class="s">"stop_reason"</span>: <span class="s">"tool_use"</span>,
+  <span class="s">"usage"</span>: { <span class="s">"input_tokens"</span>: <span class="n">1840</span>, <span class="hl"><span class="s">"output_tokens"</span>: <span class="n">912</span></span> }
+}</code></pre>
+
+  <h3>What changes</h3>
+  <ul>
+    <li><strong>You script the steps less.</strong> Provider guidance for reasoning models generally favors describing the problem, the constraints and what a good answer looks like, rather than prescribing “first do X, then Y”. Detailed step scripts can make the result worse.</li>
+    <li><strong>ReAct's “thought” becomes a thinking block.</strong> With interleaved thinking, the model can think again after each tool result, before its next action. The Chapter 03 loop doesn't change. The quality of each step does.</li>
+    <li><strong>Some checking moves inside the call.</strong> These models are trained to check their own work while thinking, so wrapping them in external self-consistency or self-critique can pay off less than it did with older models. Measure before you assume either way.</li>
+    <li><strong>Thinking costs output tokens.</strong> Thinking is billed as output, and output is the expensive side. With adaptive thinking the model decides how much to think, and an effort setting moves the dial. On some current models thinking is always on and effort is the main control, so check your model's documentation. Your budget meter must count these tokens.</li>
+    <li><strong>The protocol has a new rule.</strong> Thinking blocks come back with a <code>signature</code>. In a tool loop, send the assistant turn back exactly as you received it, thinking blocks included and unmodified. On newer models the signature is tied to the conversation that came before it, so rewriting earlier history (trimming old turns, changing the system prompt) can invalidate the reasoning. That's one more reason to keep history append-only, which Chapter 06 takes up. Depending on the model and settings, the thinking text itself may be summarized or omitted. Never build logic that parses it.</li>
+  </ul>
+
+  <h3>What doesn't change</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Need</th><th>Can internal thinking provide it?</th><th>So you still need…</th></tr></thead>
+      <tbody>
+        <tr><td>Facts the model doesn't have</td><td>No. Thinking can't fetch data.</td><td>Tools, in a ReAct loop</td></tr>
+        <tr><td>A plan your code can validate, budget, show to a person or schedule</td><td>No. Thinking is private to one call and not a stable artifact.</td><td>An explicit plan as data (plan-and-execute, DAG)</td></tr>
+        <tr><td>Feedback the model can't generate itself</td><td>No. Thinking is still self-feedback.</td><td>External evaluators: tests, validators, graders</td></tr>
+        <tr><td>Parallel work and separate contexts</td><td>No. One call thinks in one context, in sequence.</td><td>Concurrency and sub-agents (Chapters 10, 14–16)</td></tr>
+        <tr><td>Respecting your cost and time limits</td><td>No. The model doesn't know your budget.</td><td>A budget meter in the harness</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>Native thinking moves chain-of-thought inside the call. It doesn't move the plan into your harness, or the environment's feedback into the model.</strong> Agent patterns that put structure <em>outside</em> the model (explicit plans, external evaluators, parallel workers) still earn their place. Patterns that only add more reasoning <em>inside</em> one context (“think step by step”, some self-critique loops) pay off less.</p>
+  </div>
+
+  <h2 id="choosing" data-short="Choosing a pattern">Choosing a pattern: cost, latency, reliability</h2>
+  <p>“Latency” here means wall-clock time for one task. “Reliability gain” is relative to a single plain call, and it depends heavily on the task. Treat this as a starting point for your own measurements, not a ranking.</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Pattern</th><th>LLM calls</th><th>Latency</th><th>Reliability gain</th><th>Best for</th><th>Watch out for</th></tr></thead>
+      <tbody>
+        <tr><td><strong>CoT</strong></td><td>1</td><td>1 call, longer output</td><td>Good on multi-step reasoning; none on missing facts</td><td>Logic and arithmetic with everything in the prompt</td><td>Unfaithful traces; mostly absorbed by thinking models</td></tr>
+        <tr><td><strong>Self-consistency</strong></td><td><em>N</em></td><td>About 1 call, if run in parallel</td><td>Good when errors are random</td><td>Answers you can compare: numbers, labels, choices</td><td><em>N</em>× cost; no help with systematic errors</td></tr>
+        <tr><td><strong>Native thinking</strong></td><td>1</td><td>Longer, variable</td><td>High on hard reasoning</td><td>Hard single-call problems; the model inside other patterns</td><td>Output-token cost; thinking blocks must go back unmodified</td></tr>
+        <tr><td><strong>ReAct</strong></td><td>steps + 1</td><td>Sum of every model and tool round trip</td><td>Adaptive and grounded in observations</td><td>Open-ended tasks where each step depends on the last result</td><td><em>n</em>² history; wandering and loops; needs a step limit</td></tr>
+        <tr><td><strong>Plan-and-execute</strong></td><td>1 plan + steps + replans</td><td>Lower when independent steps run in parallel</td><td>Good when the structure is predictable</td><td>Plans that must be validated, approved or budgeted</td><td>Stale plans; replanning cost; over-decomposition</td></tr>
+        <tr><td><strong>ReWOO</strong></td><td>2</td><td>Low: two model calls</td><td>Similar to ReAct on fixed tool chains</td><td>Predictable chains; token-sensitive workloads</td><td>No adaptivity; failures reach the solver</td></tr>
+        <tr><td><strong>LLMCompiler</strong></td><td>plan + joiner (+ replans)</td><td>Lowest for parallel work</td><td>Similar to ReAct</td><td>Many independent lookups or tool calls</td><td>Wrong dependencies; little gain on sequential chains</td></tr>
+        <tr><td><strong>Self-Refine</strong></td><td>1 + 2 per round</td><td>Grows with rounds</td><td>Modest; limited to what the model can recognize</td><td>Writing quality, format, checklist constraints</td><td>No outside signal; can make reasoning worse</td></tr>
+        <tr><td><strong>Reflexion</strong></td><td>attempts × (run + reflect)</td><td>High: whole attempts</td><td>High, if the evaluator is reliable</td><td>Code with tests; tasks with a trustworthy success check</td><td>Weak evaluators; wrong lessons that persist</td></tr>
+        <tr><td><strong>ToT / LATS</strong></td><td>tens to hundreds</td><td>High</td><td>High on search-shaped problems</td><td>Puzzles, constrained planning; LATS needs reversible environments</td><td>Cost; a fallible judge; irreversible actions</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>A ladder that works for most agent designs: start with a capable model and a ReAct loop. Add an <strong>explicit plan</strong> when your code needs to validate, approve, budget or parallelize the work. Add an <strong>evaluator loop</strong> when you have a check that doesn't come from the model itself. Use <strong>search</strong> only for problems where states can be judged, and only in environments you can reset. Use <strong>self-consistency</strong> for short, comparable answers where mistakes look random.</p>
+
+  <div class="box pitfall">
+    <span class="box-label">Misconceptions to drop</span>
+    <ul>
+      <li>“More reasoning is always better.” Past a point it costs tokens and time, and self-critique with no new information can make answers worse.</li>
+      <li>“The plan the model wrote is the plan that runs.” Only if your code validates it and executes it.</li>
+      <li>“Self-consistency fixes hallucination.” It removes noise. A model that confidently believes a false fact votes for it five times.</li>
+      <li>“ReWOO is just a faster ReAct.” It buys its savings by giving up the ability to react to results.</li>
+      <li>“Reasoning models make agent patterns obsolete.” They absorb reasoning inside one call. Facts, plans as data, outside evaluators, parallelism and budgets still live in your harness.</li>
+    </ul>
+  </div>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>The framing.</strong> A swarm is a planning pattern. In Stage 4, the parent's LLM call that returns child tasks is the planner, the children are executors, and your aggregation step is the solver (or LLMCompiler's joiner). Which pattern in Figure 5.1 is your Stage 4 planner closest to: plan-and-execute, ReWOO or LLMCompiler? Write down why in one sentence.</li>
+      <li><strong>Stage 4 · plan once or replan?</strong> When a child fails, does the parent make a new LLM call that sees the failure (replanning), or does the failure simply come back as data in the result? If you replan, what is <code>max_replans</code>, and which line of code enforces it?</li>
+      <li><strong>Stage 4 · list or DAG?</strong> If children can depend on each other's results, your Stage 3 scheduler must respect dependencies, as LLMCompiler's task-fetching unit does. If they can't, everything runs in one wave. What do you lose by forbidding dependencies, and is it worth it for a first version?</li>
+      <li><strong>Stage 5 · where would a retry with a lesson pay off?</strong> Name the evaluator. If you can't name a signal that comes from outside the model, the retry is Self-Refine with extra steps.</li>
+      <li><strong>Stage 4 · self-consistency for plans?</strong> Sampling three plans and picking one could catch a bad decomposition. How would you compare two plans (agreement, a validator, a judge), and what does it cost against your token budget?</li>
+      <li><strong>Thinking tokens.</strong> Your budget meter must count thinking as output tokens. Which of your Stage 4 code paths rewrite message history, and would they break the “send thinking back unmodified” rule?</li>
+    </ul>
+  </div>
+
+  <h2 id="check">Check yourself</h2>
+  <p>Answer each one out loud or on paper before you open it.</p>
+  <div class="quiz">
+    <details>
+      <summary><span class="tag recall">Recall</span> Why does chain-of-thought help with multi-step reasoning, and what can't it fix?</summary>
+      <div><p>Each generated token is another forward pass of computation, and intermediate results written into the context can be attended to by later tokens, so the reasoning acts as visible working memory. It can't add facts the model doesn't have, and the written chain isn't guaranteed to be the real cause of the answer (Turpin et al.).</p></div>
+    </details>
+    <details>
+      <summary><span class="tag recall">Recall</span> Name ReWOO's three parts and say where its token savings come from.</summary>
+      <div><p>Planner (one LLM call that writes the tool chain with evidence placeholders), worker (plain code that runs the tools and fills the placeholders), solver (one LLM call that reads task, plan and evidence). Savings: the prefix (instructions, tool definitions) is sent twice instead of once per step, and each observation is sent once instead of being re-sent on every later call. The cost is that the plan can't react to results.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> A task needs four independent lookups, then a summary. Count the model calls for ReAct with one tool call per turn, ReAct with parallel tool calls, ReWOO, and LLMCompiler.</summary>
+      <div><p>ReAct, one tool per turn: 5 (four lookup turns, then the answer), each re-sending a growing history. ReAct with parallel calls: 2 (one turn requests all four, one answers), but only if the model chooses to batch. ReWOO: 2 (plan, solve); its worker runs the four tools one after another. LLMCompiler: 2 (plan, joiner), and its scheduler runs all four in one parallel wave because the plan declares no dependencies. The real differences are history size and who decides about parallelism.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> You run self-consistency (<em>n</em> = 5, no tools) on “Which team owns the billing service?”. All five samples say “platform team”, which is wrong. Why didn't voting help, and what would?</summary>
+      <div><p>Voting removes random errors. This error is systematic: the model doesn't know the fact, so every sample shares the same wrong belief, and 5 out of 5 agreement even looks like high confidence. The fix is grounding: give the model a tool that looks the owner up (ReAct), or retrieve the fact into the context (Chapter 07).</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> Your coding agent reviews its own patch using the same model and the same context, and the review almost always says “looks good”. Why, and how would you redesign it?</summary>
+      <div><p>The critic has the same knowledge, the same blind spots and the same context as the author, so it has no new information. Self-correction without external feedback often doesn't help (Huang et al.). Redesign: make the evaluator external, by running the tests, the type checker and the linter and feeding concrete failures back (Reflexion). If you still want a model reviewer, give it a fresh context, a rubric and ideally a different model, and treat its output as one signal among several.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> Someone proposes LATS for an agent that changes cloud infrastructure. What property of the environment does LATS need, and what would you propose instead?</summary>
+      <div><p>LATS expands nodes by taking real actions and then returns to earlier states to try siblings, so the environment must be resettable or reversible. Real infrastructure changes have costs and side effects that can't be undone. Options: search against a simulation or a dry-run (“plan”) mode and execute only the chosen plan; limit search to read-only actions; or use plan-and-execute with a validated plan and human approval before any write.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “Reasoning models think on their own now. Do we still need patterns like plan-and-execute or Reflexion?”</summary>
+      <div><p>Thinking moves chain-of-thought inside one call, so prompts that script reasoning steps and some self-critique loops pay off less. It doesn't replace structure outside the model: tools for facts, a plan held as data that code can validate, approve, budget and schedule in parallel, external evaluators such as tests, budgets the model doesn't know about, and separate contexts for sub-agents. Thinking also has its own costs: output tokens, latency, and protocol rules such as returning thinking blocks unmodified. The honest answer is “fewer in-context tricks, the same need for harness structure, and measure the rest”.</p></div>
+    </details>
+  </div>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><strong>Jason Wei et al., “Chain-of-Thought Prompting Elicits Reasoning in Large Language Models”</strong> (NeurIPS, 2022).<span class="why">The original CoT paper. Read the figures showing that gains grow with model scale.</span></li>
+    <li><strong>Takeshi Kojima et al., “Large Language Models are Zero-Shot Reasoners”</strong> (NeurIPS, 2022).<span class="why">“Let's think step by step”: CoT with no examples.</span></li>
+    <li><strong>Xuezhi Wang et al., “Self-Consistency Improves Chain of Thought Reasoning in Language Models”</strong> (2022; ICLR 2023).<span class="why">Sample several chains and vote. Short and clear.</span></li>
+    <li><strong>Shunyu Yao et al., “ReAct: Synergizing Reasoning and Acting in Language Models”</strong> (2022; ICLR 2023).<span class="why">The pattern your agent loop already implements. Read the trajectory examples.</span></li>
+    <li><strong>Lei Wang et al., “Plan-and-Solve Prompting: Improving Zero-Shot Chain-of-Thought Reasoning by Large Language Models”</strong> (ACL, 2023).<span class="why">Planning before solving, in a single prompt. The seed of plan-and-execute.</span></li>
+    <li><strong>Binfeng Xu et al., “ReWOO: Decoupling Reasoning from Observations for Efficient Augmented Language Models”</strong> (2023).<span class="why">Planner, worker, solver, and the token accounting behind Figure 5.4.</span></li>
+    <li><strong>Sehoon Kim et al., “An LLM Compiler for Parallel Function Calling”</strong> (2023; ICML 2024).<span class="why">Plans as dependency graphs, executed in parallel. Closest to what a swarm scheduler does.</span></li>
+    <li><strong>Noah Shinn et al., “Reflexion: Language Agents with Verbal Reinforcement Learning”</strong> (NeurIPS, 2023).<span class="why">Lessons in memory between attempts. Pay attention to the role of the evaluator.</span></li>
+    <li><strong>Aman Madaan et al., “Self-Refine: Iterative Refinement with Self-Feedback”</strong> (NeurIPS, 2023).<span class="why">Generate, critique, refine with one model.</span></li>
+    <li><strong>Jie Huang et al., “Large Language Models Cannot Self-Correct Reasoning Yet”</strong> (2023; ICLR 2024).<span class="why">The counterweight to the two papers above: why feedback must carry new information.</span></li>
+    <li><strong>Shunyu Yao et al., “Tree of Thoughts: Deliberate Problem Solving with Large Language Models”</strong> (NeurIPS, 2023).<span class="why">Reasoning as search. The source of the Game of 24 example.</span></li>
+    <li><strong>Andy Zhou et al., “Language Agent Tree Search Unifies Reasoning, Acting, and Planning in Language Models”</strong> (2023; ICML 2024).<span class="why">MCTS over agent trajectories, with reflections.</span></li>
+    <li><strong>Miles Turpin et al., “Language Models Don't Always Say What They Think: Unfaithful Explanations in Chain-of-Thought Prompting”</strong> (NeurIPS, 2023).<span class="why">Why CoT text is a trace, not a proof.</span></li>
+    <li><strong>DeepSeek-AI, “DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning”</strong> (2025).<span class="why">An openly described recipe for training a reasoning model.</span></li>
+    <li><strong>Anthropic, Claude API documentation:</strong> “Extended thinking” and “Adaptive thinking”.<span class="why">The source for the thinking request fields, effort, and the rules for returning thinking blocks in tool loops. Check it for your model, because the details vary between models.</span></li>
+  </ul>
+
+  <section class="recall-card" aria-labelledby="recall-05">
+    <h2 id="recall-05" data-short="Recall card">Recall card</h2>
+    <p class="muted small">Five lines to rehearse. If you can expand each into a minute of explanation, you know this chapter.</p>
+    <ol>
+      <li>Every pattern trades calls and tokens for reliability. Ask: how many calls, what each one sees, and who decides the next one.</li>
+      <li>CoT adds computation and visible working memory, but no facts. Self-consistency removes noise, not shared bias.</li>
+      <li>ReAct is the Chapter 03 loop: adaptive but greedy, with growing history. Plan-and-execute, ReWOO and LLMCompiler move the plan into data your code can validate and schedule.</li>
+      <li>A reflection loop is only as good as its evaluator. Outside signals (tests, validators) beat self-critique.</li>
+      <li>Thinking models move CoT inside the call. Plans as data, outside feedback, parallelism and budgets stay in the harness.</li>
+    </ol>
+  </section>
+
+  <div class="done">
+    <input type="checkbox" id="done-toggle" data-chapter="05">
+    <label for="done-toggle">I can explain this chapter without notes<small>Saved in this browser only. It updates the count on the guide's home page.</small></label>
+  </div>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="04-tool-use.html"><small>Previous · Chapter 04</small>Tool use in depth</a>
+    <a class="next" href="06-context-engineering.html"><small>Next · Chapter 06</small>Context engineering</a>
+  </nav>
+</main>
+<aside class="toc-rail" aria-label="On this page"><p class="toc-title">In this chapter</p><nav data-toc></nav></aside>
+</div>
+</body>
+</html>

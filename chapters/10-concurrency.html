@@ -1,0 +1,928 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Concurrency for Agents · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="../index.html">Loop <span>→</span> Swarm</a>
+    <div class="crumbs"><a href="../index.html">Guide</a> · Part 3 · The harness · Chapter 10</div>
+    <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+  </div>
+</header>
+
+<div class="page has-toc">
+<main class="chapter">
+
+  <header class="ch-head">
+    <p class="eyebrow"><b>Part 3 · The harness</b> · Chapter 10 · Level L3</p>
+    <h1>Concurrency for agents</h1>
+    <p class="lede">An agent spends most of its life waiting for a model to reply. Concurrency is how one program keeps doing useful work during those waits. This chapter builds asyncio from the bottom up: the event loop, tasks, groups of tasks, cancellation and limits. It also covers the bugs that show up the moment two children run at once.</p>
+    <ul class="ch-meta">
+      <li><b>70 min</b> reading</li>
+      <li>Builds on: <b>Ch 03, Ch 09</b></li>
+      <li>Your project: <b>Stage 0A, Stage 3</b></li>
+    </ul>
+    <ol class="where" aria-label="Where this chapter sits in the guide">
+      <li class="past"><span>Part 1</span>Foundations</li>
+      <li class="past"><span>Part 2</span>Thinking &amp; memory</li>
+      <li class="here"><span>Part 3</span>The harness</li>
+      <li><span>Part 4</span>Multi-agent</li>
+      <li><span>Part 5</span>Together</li>
+    </ol>
+  </header>
+
+  <details class="toc-mobile"><summary>In this chapter</summary><div data-toc></div></details>
+
+  <div class="box predict">
+    <span class="box-label">Predict first · 10 min</span>
+    <p>Write answers in <code>docs/LEARNING_NOTES.md</code> under “Guide ch10”. Tag each one <em>sure</em> or <em>guess</em>. Don't read on until you're done.</p>
+    <ol>
+      <li>Five agents each wait about 3 seconds for a model reply. Roughly how long do all five take if they run one after another? And if they run concurrently on a single thread? Would five threads finish faster than one thread running asyncio? Why or why not?</li>
+      <li>A parent runs three children with <code>asyncio.gather</code>. Child B raises an error after 1 second, and children A and C need 3 seconds. When does the parent see the error? Are A and C still running at that moment?</li>
+      <li>8,000 tokens are left in the budget. Two children each check “are at least 5,000 left?”, and each has an <code>await</code> between that check and the line that deducts. Can both pass the check? In a single-threaded program, where exactly could the other child run?</li>
+    </ol>
+  </div>
+
+  <h2 id="big-idea">The big idea</h2>
+  <p>Look at what one agent step actually does. Your code builds a request, which takes microseconds. It sends the request and waits for the reply, which takes seconds. Then it parses the reply and updates some state, which is microseconds again. Almost all of the step is waiting, and during that wait your process has nothing to compute.</p>
+  <p>Two words get mixed up here, and the rest of the chapter depends on keeping them apart:</p>
+  <dl class="defs">
+    <dt>Concurrency</dt><dd>Several tasks are <em>in progress</em> at the same time, so their lifetimes overlap. That says nothing about whether two instructions ever execute at the same instant.</dd>
+    <dt>Parallelism</dt><dd>Two instructions <em>execute</em> at the same instant, on different CPU cores.</dd>
+  </dl>
+  <p>A single cook with three pots on the stove is concurrent. Three cooks are parallel. If the pots mostly need waiting rather than stirring, one cook does fine.</p>
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>For agents, concurrency means overlapping waits, not using more cores.</strong> One thread can keep many model calls in flight at once, because while a call is in flight nothing in your process is computing. Every tool in this chapter is there to make that overlap happen, to bound it, or to stop it from corrupting shared state.</p>
+  </div>
+  <p>The chapter goes from the bottom up. First, what kind of work agents do. Then the four ways a child could run. Then how asyncio's event loop switches between tasks. Then the tools (<code>create_task</code>, <code>gather</code>, <code>TaskGroup</code>, cancellation, timeouts, semaphores, locks), each with the bug it prevents or causes. Chapter 09 made a run's state explicit. This chapter is about what happens when several pieces of code change that state at once.</p>
+
+  <h2 id="io-vs-cpu" data-short="I/O-bound vs CPU-bound">I/O-bound vs CPU-bound work</h2>
+  <p>Every piece of work is limited by something. Name the limit and you know which kind of concurrency can help.</p>
+  <dl class="defs">
+    <dt>CPU-bound</dt><dd>The work finishes as fast as the processor can compute it. Examples: tokenizing a large corpus locally, computing embeddings on the CPU, parsing a 200 MB file, running a small model on your laptop. The thread is busy the whole time.</dd>
+    <dt>I/O-bound</dt><dd>The work finishes when something <em>outside</em> the processor answers: the network, the disk, a subprocess, a human. Examples: a model API call, a web search tool, reading a file, waiting for an approval. The thread is idle for most of it.</dd>
+  </dl>
+  <p>An agent harness is overwhelmingly I/O-bound. A model call usually takes seconds, and longer outputs take longer (Chapter 01). Building the request and parsing a typical JSON reply usually take well under a millisecond. Here is what that means for five agents.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 352" role="img" aria-label="Timeline drawn to scale at 40 pixels per second. Top: five agents run one after another. Their waits of 3, 2, 4, 2.5 and 3.5 seconds are laid end to end, so the run takes 15 seconds. Bottom: the same five agents run concurrently on one thread. All five waits overlap from time zero, and the run ends when the longest wait ends, at 4 seconds. Thin dark ticks mark the CPU work at the start and end of each wait.">
+        <rect class="n-accent" x="110" y="8" width="14" height="12" rx="2"/>
+        <text class="t-sm" x="130" y="18">waiting on the LLM API (to scale)</text>
+        <rect class="fill-fg" x="330" y="8" width="4" height="12"/>
+        <text class="t-sm" x="340" y="18">CPU work (widened: true width is under 1 px)</text>
+
+        <line class="e-line" x1="310" y1="54" x2="310" y2="170"/>
+        <line class="e-line" x1="510" y1="54" x2="510" y2="170"/>
+
+        <text class="t-b" x="20" y="46">Sequential · one call at a time · 15 s</text>
+        <text class="t-sm" x="20" y="72">agent 1</text>
+        <text class="t-sm" x="20" y="94">agent 2</text>
+        <text class="t-sm" x="20" y="116">agent 3</text>
+        <text class="t-sm" x="20" y="138">agent 4</text>
+        <text class="t-sm" x="20" y="160">agent 5</text>
+        <rect class="n-accent" x="110" y="60" width="120" height="16" rx="2"/>
+        <rect class="n-accent" x="230" y="82" width="80" height="16" rx="2"/>
+        <rect class="n-accent" x="310" y="104" width="160" height="16" rx="2"/>
+        <rect class="n-accent" x="470" y="126" width="100" height="16" rx="2"/>
+        <rect class="n-accent" x="570" y="148" width="140" height="16" rx="2"/>
+        <rect class="fill-fg" x="110" y="60" width="3" height="16"/><rect class="fill-fg" x="227" y="60" width="3" height="16"/>
+        <rect class="fill-fg" x="230" y="82" width="3" height="16"/><rect class="fill-fg" x="307" y="82" width="3" height="16"/>
+        <rect class="fill-fg" x="310" y="104" width="3" height="16"/><rect class="fill-fg" x="467" y="104" width="3" height="16"/>
+        <rect class="fill-fg" x="470" y="126" width="3" height="16"/><rect class="fill-fg" x="567" y="126" width="3" height="16"/>
+        <rect class="fill-fg" x="570" y="148" width="3" height="16"/><rect class="fill-fg" x="707" y="148" width="3" height="16"/>
+        <text class="t-xs t-muted" x="118" y="160">agent 5 starts only after agents 1–4 finish</text>
+
+        <text class="t-b" x="20" y="196">Concurrent · all five in flight on one thread · 4 s</text>
+        <text class="t-sm" x="20" y="220">agent 1</text>
+        <text class="t-sm" x="20" y="242">agent 2</text>
+        <text class="t-sm" x="20" y="264">agent 3</text>
+        <text class="t-sm" x="20" y="286">agent 4</text>
+        <text class="t-sm" x="20" y="308">agent 5</text>
+        <rect class="n-accent" x="110" y="208" width="120" height="16" rx="2"/>
+        <rect class="n-accent" x="110" y="230" width="80" height="16" rx="2"/>
+        <rect class="n-accent" x="110" y="252" width="160" height="16" rx="2"/>
+        <rect class="n-accent" x="110" y="274" width="100" height="16" rx="2"/>
+        <rect class="n-accent" x="110" y="296" width="140" height="16" rx="2"/>
+        <rect class="fill-fg" x="110" y="208" width="3" height="16"/><rect class="fill-fg" x="227" y="208" width="3" height="16"/>
+        <rect class="fill-fg" x="110" y="230" width="3" height="16"/><rect class="fill-fg" x="187" y="230" width="3" height="16"/>
+        <rect class="fill-fg" x="110" y="252" width="3" height="16"/><rect class="fill-fg" x="267" y="252" width="3" height="16"/>
+        <rect class="fill-fg" x="110" y="274" width="3" height="16"/><rect class="fill-fg" x="207" y="274" width="3" height="16"/>
+        <rect class="fill-fg" x="110" y="296" width="3" height="16"/><rect class="fill-fg" x="247" y="296" width="3" height="16"/>
+
+        <line class="e-accent e-dash" x1="270" y1="204" x2="270" y2="318"/>
+        <text class="t-sm t-accent" x="276" y="220">all done at 4 s</text>
+        <line class="e-muted e-dash" x1="710" y1="204" x2="710" y2="318"/>
+        <text class="t-xs t-muted" x="704" y="264" text-anchor="end">sequential finished here (15 s)</text>
+        <text class="t-xs t-accent" x="490" y="286" text-anchor="middle">11 s of waiting overlapped</text>
+        <line class="e-accent" x1="276" y1="304" x2="704" y2="304"/>
+
+        <line class="e-muted" x1="110" y1="328" x2="710" y2="328"/>
+        <line class="e-muted" x1="110" y1="328" x2="110" y2="333"/>
+        <line class="e-muted" x1="310" y1="328" x2="310" y2="333"/>
+        <line class="e-muted" x1="510" y1="328" x2="510" y2="333"/>
+        <line class="e-muted" x1="710" y1="328" x2="710" y2="333"/>
+        <text class="t-xs t-muted" x="110" y="346" text-anchor="middle">0</text>
+        <text class="t-xs t-muted" x="310" y="346" text-anchor="middle">5 s</text>
+        <text class="t-xs t-muted" x="510" y="346" text-anchor="middle">10 s</text>
+        <text class="t-xs t-muted" x="716" y="346" text-anchor="end">15 s</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 10.1</b>Five agents, each waiting 2 to 4 seconds for a model reply, drawn to scale at 40 px per second. Run one after another, the waits add up. Run concurrently, they overlap, and the run takes as long as the longest single wait. The dark ticks are the only moments when the thread has anything to do.</figcaption>
+  </figure>
+
+  <div class="formula">
+    sequential ≈ sum of the waits&nbsp; = 3 + 2 + 4 + 2.5 + 3.5 = 15 s<br>
+    concurrent ≈ longest wait + total CPU work ≈ 4 s + (a few ms)<br><br>
+    <span class="muted">Same five jobs, but each is 3 s of computing instead of waiting:</span><br>
+    one thread, any style&nbsp; ≈ 5 × 3 = 15 s&nbsp; <span class="muted">← nothing to overlap; you'd need more cores</span>
+  </div>
+
+  <p>The last line is the point. Concurrency on one thread helps only because the thread is idle during the waits. Give it five CPU-bound jobs and there is no idle time to fill, so the total stays at 15 seconds whichever way you schedule them. CPU-bound work gets faster only with <em>parallelism</em>, meaning more cores. In standard CPython that means more processes, for reasons the next section explains.</p>
+  <div class="box pitfall">
+    <span class="box-label">Pitfall</span>
+    <p>Concurrency reduces wall-clock time, not cost. Five concurrent calls are billed exactly the same tokens as five sequential ones. It also doesn't lift the provider's rate limits. Fifty children launched at once will hit them, which is why this chapter ends with semaphores.</p>
+  </div>
+
+  <div class="box stop">
+    <span class="box-label">Checkpoint · Round 2, question 2</span>
+    <p><strong>Write your Round 2 Q2 answer in <code>docs/LEARNING_NOTES.md</code> first.</strong> The next section compares process, thread, coroutine and plain function call side by side. Once you've seen that table, it will do your thinking for you. Pick one of the four and defend it, using Figure 10.1 as evidence. Separate “create” from “run”, and say who decides that a child should exist and who enforces the limits. If you've already done Stage 0A exercises 1 and 2, use what you saw. Then read on. Where the table disagrees with your answer, write down which of you is right and why. Don't overwrite your answer with the guide's.</p>
+  </div>
+
+  <h2 id="four-ways" data-short="Four ways to run a child">Process, thread, coroutine or function call</h2>
+  <p>Any of the four can run a child agent. They differ in four ways: where the child's code executes, who decides when it pauses, what it shares with the parent, and what the parent can do to it while it runs. Start with what each one is.</p>
+  <dl class="defs">
+    <dt>Function call</dt><dd>The child's code runs on the parent's own call stack. The parent's next line runs only after the child returns, and nothing else happens in between.</dd>
+    <dt>Coroutine</dt><dd>A function defined with <code>async def</code>. It can pause at an <code>await</code> and be resumed later. Wrapped in an asyncio <strong>task</strong>, it is scheduled on an event loop next to the parent and its siblings, all on one thread. It switches only where it awaits.</dd>
+    <dt>Thread</dt><dd>A line of execution scheduled by the operating system inside the same process. It shares all memory with the parent. In CPython, only one thread runs Python code at a time, because of the <strong>global interpreter lock</strong> (GIL). By default, the running thread is asked to give up the GIL after about 5 ms if another thread is waiting (<code>sys.getswitchinterval()</code>). Blocking I/O releases the GIL while it waits.</dd>
+    <dt>Process</dt><dd>A separate running program with its own interpreter and its own memory. Nothing is shared unless you send it. Arguments and results travel between processes as serialized (usually pickled) messages.</dd>
+  </dl>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 392" role="img" aria-label="Where a child lives under each option. Process 1 contains thread 1 and thread 2, and a band of memory shared by everything inside it. Thread 1 runs an event loop with three tasks: the parent, which is running, and child A and child B, each a column of stacked function frames. Badge 1 marks a new frame on the parent's stack, which is a function call. Badge 2 marks a new task in the same loop, which is a coroutine. Thread 2 holds child C; badge 3 marks a new thread. Process 2, to the right, has its own thread and its own memory, holds child D, and exchanges pickled messages with process 1; badge 4 marks a new process.">
+        <defs>
+          <marker id="f102-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <!-- process 1 -->
+        <rect class="n-group" x="16" y="36" width="540" height="302" rx="10"/>
+        <text class="t-sm t-b" x="28" y="56">process 1 · its own memory and interpreter</text>
+
+        <!-- thread 1 with event loop -->
+        <rect class="n-sunken" x="30" y="68" width="370" height="212" rx="8"/>
+        <text class="t-sm" x="42" y="86">thread 1 · event loop switches tasks at each await</text>
+
+        <rect class="n-accent" x="42" y="96" width="108" height="176" rx="6"/>
+        <text class="t-sm t-b" x="96" y="114" text-anchor="middle">task: parent</text>
+        <text class="t-xs t-accent" x="96" y="140" text-anchor="middle">running now</text>
+        <rect x="50" y="184" width="92" height="24" rx="3"/><text class="t-mono" x="96" y="200" text-anchor="middle">parse()</text>
+        <rect x="50" y="212" width="92" height="24" rx="3"/><text class="t-mono" x="96" y="228" text-anchor="middle">decide()</text>
+        <rect x="50" y="240" width="92" height="24" rx="3"/><text class="t-mono" x="96" y="256" text-anchor="middle">run_agent()</text>
+
+        <rect x="162" y="96" width="108" height="176" rx="6"/>
+        <text class="t-sm t-b" x="216" y="114" text-anchor="middle">task: child A</text>
+        <text class="t-xs t-muted" x="216" y="140" text-anchor="middle">waiting for a reply</text>
+        <rect x="170" y="212" width="92" height="24" rx="3"/><text class="t-mono" x="216" y="228" text-anchor="middle">call_model()</text>
+        <rect x="170" y="240" width="92" height="24" rx="3"/><text class="t-mono" x="216" y="256" text-anchor="middle">run_agent()</text>
+
+        <rect x="282" y="96" width="108" height="176" rx="6"/>
+        <text class="t-sm t-b" x="336" y="114" text-anchor="middle">task: child B</text>
+        <text class="t-xs t-muted" x="336" y="140" text-anchor="middle">ready, next in line</text>
+        <rect x="290" y="212" width="92" height="24" rx="3"/><text class="t-mono" x="336" y="228" text-anchor="middle">call_model()</text>
+        <rect x="290" y="240" width="92" height="24" rx="3"/><text class="t-mono" x="336" y="256" text-anchor="middle">run_agent()</text>
+
+        <!-- thread 2 -->
+        <rect class="n-sunken" x="412" y="68" width="132" height="212" rx="8"/>
+        <text class="t-sm" x="424" y="86">thread 2</text>
+        <rect x="422" y="96" width="112" height="176" rx="6"/>
+        <text class="t-sm t-b" x="478" y="114" text-anchor="middle">child C</text>
+        <text class="t-xs t-muted" x="478" y="140" text-anchor="middle">OS decides when</text>
+        <rect x="430" y="212" width="96" height="24" rx="3"/><text class="t-mono" x="478" y="228" text-anchor="middle">call_model()</text>
+        <rect x="430" y="240" width="96" height="24" rx="3"/><text class="t-mono" x="478" y="256" text-anchor="middle">run_agent()</text>
+
+        <!-- shared memory -->
+        <rect class="n-violet" x="30" y="290" width="514" height="36" rx="6"/>
+        <text class="t-sm" x="42" y="312">memory shared by every task and thread in here: budget, registry, trace file</text>
+
+        <!-- process 2 -->
+        <rect class="n-group" x="600" y="36" width="144" height="302" rx="10"/>
+        <text class="t-sm t-b" x="612" y="56">process 2</text>
+        <rect class="n-sunken" x="610" y="68" width="124" height="212" rx="8"/>
+        <text class="t-sm" x="620" y="86">thread 1</text>
+        <rect x="618" y="96" width="108" height="176" rx="6"/>
+        <text class="t-sm t-b" x="672" y="114" text-anchor="middle">child D</text>
+        <rect x="624" y="212" width="96" height="24" rx="3"/><text class="t-mono" x="672" y="228" text-anchor="middle">call_model()</text>
+        <rect x="624" y="240" width="96" height="24" rx="3"/><text class="t-mono" x="672" y="256" text-anchor="middle">run_agent()</text>
+        <rect class="n-violet" x="610" y="290" width="124" height="36" rx="6"/>
+        <text class="t-sm" x="672" y="312" text-anchor="middle">its own memory</text>
+
+        <line x1="558" y1="180" x2="598" y2="180" marker-start="url(#f102-ah)" marker-end="url(#f102-ah)"/>
+        <text class="t-xs" x="578" y="172" text-anchor="middle">messages</text>
+        <text class="t-xs t-muted" x="578" y="196" text-anchor="middle">(pickled)</text>
+
+        <!-- badges -->
+        <circle class="n-amber" cx="146" cy="184" r="9"/><text class="t-xs t-b" x="146" y="188" text-anchor="middle">1</text>
+        <circle class="n-amber" cx="264" cy="104" r="9"/><text class="t-xs t-b" x="264" y="108" text-anchor="middle">2</text>
+        <circle class="n-amber" cx="530" cy="82" r="9"/><text class="t-xs t-b" x="530" y="86" text-anchor="middle">3</text>
+        <circle class="n-amber" cx="728" cy="52" r="9"/><text class="t-xs t-b" x="728" y="56" text-anchor="middle">4</text>
+
+        <!-- legend -->
+        <circle class="n-amber" cx="26" cy="358" r="8"/><text class="t-xs t-b" x="26" y="362" text-anchor="middle">1</text>
+        <text class="t-sm" x="40" y="362">function call: a new frame on the same stack</text>
+        <circle class="n-amber" cx="402" cy="358" r="8"/><text class="t-xs t-b" x="402" y="362" text-anchor="middle">2</text>
+        <text class="t-sm" x="416" y="362">coroutine: a new task in the same event loop</text>
+        <circle class="n-amber" cx="26" cy="380" r="8"/><text class="t-xs t-b" x="26" y="384" text-anchor="middle">3</text>
+        <text class="t-sm" x="40" y="384">thread: a new OS thread in the same process</text>
+        <circle class="n-amber" cx="402" cy="380" r="8"/><text class="t-xs t-b" x="402" y="384" text-anchor="middle">4</text>
+        <text class="t-sm" x="416" y="384">process: a new interpreter with its own memory</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 10.2</b>Where a child lives under each option. Each box contains the ones inside it: a process holds threads, a thread can run an event loop, the loop holds tasks, and each task has its own stack of function frames. Moving out from ① to ④ gives the child more independence. It also costs more, and the child shares less with the parent.</figcaption>
+  </figure>
+
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th></th><th>Function call</th><th>Coroutine (task)</th><th>Thread</th><th>Process</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Who decides when it pauses</strong></td><td>Nobody: it runs to the end</td><td>The child, at each <code>await</code></td><td>The OS, almost anywhere</td><td>The OS, almost anywhere</td></tr>
+        <tr><td><strong>Parent works meanwhile?</strong></td><td>No</td><td>Yes, whenever the child awaits</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td><strong>Many children waiting at once</strong></td><td>No</td><td>Yes, cheaply</td><td>Yes, one thread each</td><td>Yes, one process each</td></tr>
+        <tr><td><strong>Uses several cores for Python code</strong></td><td>No</td><td>No</td><td>Not in standard CPython (GIL)</td><td>Yes</td></tr>
+        <tr><td><strong>Shares memory with the parent</strong></td><td>All of it</td><td>All of it</td><td>All of it</td><td>None, unless sent</td></tr>
+        <tr><td><strong>Where races can happen</strong></td><td>Nowhere</td><td>Only across an <code>await</code></td><td>Between almost any two steps</td><td>Only in what you share on purpose</td></tr>
+        <tr><td><strong>Cost to start one</strong></td><td>Tiny: a stack frame</td><td>Small: a Python object</td><td>Larger: an OS thread and its stack</td><td>Largest: a new interpreter</td></tr>
+        <tr><td><strong>Parent can stop it?</strong></td><td>No; the parent isn't running</td><td>Yes: <code>cancel()</code>, delivered at the next <code>await</code></td><td>Only by asking it to check a flag</td><td>Yes: terminate the process</td></tr>
+        <tr><td><strong>If the child crashes</strong></td><td>The exception lands in the parent</td><td>Stored in the task until someone awaits it</td><td>That thread ends; you see it only if you collect it</td><td>Contained: the parent gets an error or exit code</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Two notes on the thread column. CPython 3.13 and later offer an optional free-threaded build without the GIL, but the default build still has it, and most of the ecosystem still assumes it. Also, “races between almost any two steps” is not an exaggeration. Even <code>counter += 1</code> is several bytecode steps, and the OS can switch threads between them.</p>
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>The table doesn't pick for you.</strong> Every column wins some rows and loses others. Your spec already commits to <code>async</code> (principle 2.6), but that doesn't answer Q2 for you. A real defence says which rows matter for an agent that spends most of its life waiting, and what you give up in the rows where your choice loses. The options also combine. A harness built on one of them can still hand a blocking library call to a thread, or run untrusted code in a separate process (Chapter 12).</p>
+  </div>
+
+  <h2 id="event-loop" data-short="The event loop">How the event loop works</h2>
+  <p>The rest of the chapter uses asyncio, so it's worth knowing exactly what it does. There are four pieces, and each builds on the one before.</p>
+  <dl class="defs">
+    <dt>Coroutine</dt><dd>What calling an <code>async def</code> function gives you. The body has <em>not</em> started; you have a paused computation sitting at its first line.</dd>
+    <dt>Future</dt><dd>A placeholder for a result that doesn't exist yet: “the reply on this socket”, “the timer due in 2 seconds”. It is either pending or done. Every chain of awaits eventually ends at one.</dd>
+    <dt>Task</dt><dd>The thing that drives one coroutine. It runs the coroutine one step at a time. A step lasts until the coroutine awaits a future that isn't done yet. Then the task arranges to be woken when that future completes, and hands the thread back to the loop.</dd>
+    <dt>Event loop</dt><dd>One loop, on one thread, that runs task steps and other callbacks. It keeps a <strong>ready queue</strong> (a first-in, first-out list of steps that can run now), a set of timers sorted by due time, and the sockets it is watching for the operating system.</dd>
+  </dl>
+  <p>Each turn of the loop does three things. It asks the operating system which watched sockets are ready, waiting at most until the next timer is due (and not at all if the ready queue already has work). It moves those wake-ups, and any timers that are due, onto the ready queue. Then it runs what's in the queue, one step at a time.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 300" role="img" aria-label="The event loop's cycle. A ready queue holds three steps: B resume, C start and D resume. The loop takes the next one and runs it; only task A is running. When A awaits something that isn't ready, it yields and joins the waiting area, which holds E awaiting a reply, F awaiting sleep, G awaiting a reply and H awaiting a semaphore slot. When I/O is ready or a timer is due, the wake-up joins the back of the ready queue. When a task returns or raises, it is done.">
+        <defs>
+          <marker id="f103-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f103-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f103-ahv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-violet" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-sm t-b" x="20" y="34">ready queue (first in, first out)</text>
+        <rect x="20" y="44" width="74" height="32" rx="4"/><text class="t-sm" x="57" y="64" text-anchor="middle">B: resume</text>
+        <rect x="100" y="44" width="74" height="32" rx="4"/><text class="t-sm" x="137" y="64" text-anchor="middle">C: start</text>
+        <rect x="180" y="44" width="74" height="32" rx="4"/><text class="t-sm" x="217" y="64" text-anchor="middle">D: resume</text>
+        <text class="t-xs t-muted" x="66" y="96">empty queue: the loop sleeps</text>
+        <text class="t-xs t-muted" x="66" y="108">until the next I/O or timer</text>
+
+        <line class="e-accent" x1="256" y1="60" x2="358" y2="60" marker-end="url(#f103-aha)"/>
+        <text class="t-xs t-accent" x="307" y="52" text-anchor="middle">take next</text>
+
+        <rect class="n-accent n-thick" x="360" y="36" width="150" height="50" rx="8"/>
+        <text class="t-b" x="435" y="58" text-anchor="middle">running: task A</text>
+        <text class="t-xs" x="435" y="75" text-anchor="middle">one at a time</text>
+
+        <line x1="510" y1="61" x2="578" y2="61" marker-end="url(#f103-ah)"/>
+        <text class="t-xs" x="544" y="53" text-anchor="middle">returns</text>
+        <rect class="n-sunken" x="580" y="40" width="124" height="42" rx="6"/>
+        <text class="t-b" x="642" y="58" text-anchor="middle">done</text>
+        <text class="t-xs t-muted" x="642" y="74" text-anchor="middle">result or exception</text>
+
+        <line x1="435" y1="86" x2="435" y2="158" marker-end="url(#f103-ah)"/>
+        <text class="t-xs" x="428" y="118" text-anchor="end">awaits something</text>
+        <text class="t-xs" x="428" y="131" text-anchor="end">not ready yet: yields</text>
+
+        <rect class="n-group" x="200" y="160" width="330" height="112" rx="8"/>
+        <text class="t-sm t-b" x="212" y="180">waiting: suspended at an await</text>
+        <rect class="n-violet" x="212" y="192" width="150" height="30" rx="4"/><text class="t-sm" x="287" y="211" text-anchor="middle">E: await reply</text>
+        <rect class="n-violet" x="370" y="192" width="150" height="30" rx="4"/><text class="t-sm" x="445" y="211" text-anchor="middle">F: await sleep(2)</text>
+        <rect class="n-violet" x="212" y="230" width="150" height="30" rx="4"/><text class="t-sm" x="287" y="249" text-anchor="middle">G: await reply</text>
+        <rect class="n-violet" x="370" y="230" width="150" height="30" rx="4"/><text class="t-sm" x="445" y="249" text-anchor="middle">H: await sem slot</text>
+
+        <path class="e-violet" d="M200,216 H57 V78" marker-end="url(#f103-ahv)"/>
+        <text class="t-xs t-violet" x="64" y="130">I/O ready or timer due:</text>
+        <text class="t-xs t-violet" x="64" y="143">the wake-up joins the queue</text>
+
+        <text class="t-xs t-muted" x="20" y="292">The OS reports which sockets are ready; timers fire on schedule. Neither can interrupt a step that is running.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 10.3</b>The event loop's cycle. Only one task runs at a time. A task leaves the running slot in one of two ways: by finishing, or by awaiting something that isn't ready. There's no third way. The loop never interrupts a running step; it only picks the next one once the current step gives the thread back.</figcaption>
+  </figure>
+
+  <p>Here's one coroutine, annotated with where it can and can't be paused:</p>
+  <p class="code-label">One agent step, from the loop's point of view</p>
+<pre><code><span class="k">async def</span> agent_step(name):
+    prompt = build_prompt(name)            <span class="c"># runs alone: no other task can run here</span>
+    reply = <span class="k">await</span> call_model(prompt)       <span class="c"># suspends: the loop runs other tasks for seconds</span>
+    plan = parse(reply)                    <span class="c"># resumes on exactly this line, then runs alone again</span>
+    <span class="k">await</span> trace.write(<span class="s">"planned"</span>, name)     <span class="c"># may suspend: another chance for a switch</span>
+    <span class="k">return</span> plan                            <span class="c"># the task is done</span></code></pre>
+  <p>Two consequences matter for everything that follows.</p>
+  <ol>
+    <li><strong>Between two awaits, your code runs alone.</strong> No other task can read or change shared state in that stretch. That's the most useful fact about asyncio, and the <a href="#races">race section</a> is built on it.</li>
+    <li><strong>An <code>await</code> is a place where a switch <em>may</em> happen.</strong> Only an await that actually has to wait gives up the thread. Awaiting a coroutine that never waits runs straight through, like a function call. Don't rely on that. A helper that doesn't wait today may start waiting after a small refactor, such as adding a trace write. Treat every <code>await</code> as a switch point.</li>
+  </ol>
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>asyncio is cooperative.</strong> A task gives up the thread only at an await. That makes it easy to reason about, because no switch can happen between two awaits. It also makes it easy to break, because a task that never awaits stops everyone else. Threads are the opposite: the OS can switch them almost anywhere, so you can't point at the lines where a switch happens.</p>
+  </div>
+
+  <h2 id="create-vs-await" data-short="create_task vs await">create_task vs await: creating work vs running it</h2>
+  <p>Three lines of code look almost the same and do very different things. This is the asyncio version of the “create vs run” distinction in your Q2.</p>
+  <dl class="defs">
+    <dt>child(x)</dt><dd>Builds a coroutine object and nothing else. No line of <code>child</code> runs. If the object is thrown away without ever being awaited, Python warns <em>“coroutine 'child' was never awaited”</em>.</dd>
+    <dt>await child(x)</dt><dd>Runs the child now, <em>inside the current task</em>. The parent stops at this line until the child finishes. No new task is made, so this alone adds no concurrency. It behaves like a function call, except that other tasks may run while the child waits.</dd>
+    <dt>create_task(child(x))</dt><dd>Wraps the coroutine in a new task, puts its first step on the ready queue, and returns a <code>Task</code> handle at once. The parent keeps running. The child starts the next time the parent gives up the thread.</dd>
+    <dt>await task</dt><dd>Waits for a task that already exists to finish, then returns its result or raises its exception.</dd>
+  </dl>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 296" role="img" aria-label="Three ways to start three one-second children, on a 0 to 3 second timeline. Row a: awaiting each child in turn runs them back to back, so they finish at 3 seconds. Row b: create_task three times, then await each; all three are created at time zero, start once the parent first awaits, overlap, and finish at 1 second. Row c: calling child() without awaiting or scheduling it creates only a coroutine object, which never runs; Python warns that it was never awaited.">
+        <text class="t-sm t-b" x="16" y="40">a · await child() three times, in turn</text>
+        <text class="t-xs" x="190" y="61" text-anchor="end">child a</text>
+        <text class="t-xs" x="190" y="79" text-anchor="end">child b</text>
+        <text class="t-xs" x="190" y="97" text-anchor="end">child c</text>
+        <rect class="n-accent" x="200" y="50" width="120" height="14" rx="2"/>
+        <rect class="n-accent" x="320" y="68" width="120" height="14" rx="2"/>
+        <rect class="n-accent" x="440" y="86" width="120" height="14" rx="2"/>
+        <text class="t-sm" x="572" y="79">done at 3 s</text>
+
+        <text class="t-sm t-b" x="16" y="130">b · create_task() three times, then await each</text>
+        <text class="t-xs" x="190" y="151" text-anchor="end">child a</text>
+        <text class="t-xs" x="190" y="169" text-anchor="end">child b</text>
+        <text class="t-xs" x="190" y="187" text-anchor="end">child c</text>
+        <rect class="n-accent" x="204" y="140" width="120" height="14" rx="2"/>
+        <rect class="n-accent" x="204" y="158" width="120" height="14" rx="2"/>
+        <rect class="n-accent" x="204" y="176" width="120" height="14" rx="2"/>
+        <circle class="n-violet" cx="200" cy="147" r="4"/>
+        <circle class="n-violet" cx="200" cy="165" r="4"/>
+        <circle class="n-violet" cx="200" cy="183" r="4"/>
+        <text class="t-sm t-accent" x="572" y="169">done at 1 s</text>
+        <text class="t-xs t-muted" x="204" y="206">dots: created at 0 s. Each starts once the parent's first await gives up the thread.</text>
+
+        <text class="t-sm t-b" x="16" y="236">c · child() called, never awaited or scheduled</text>
+        <text class="t-xs" x="190" y="257" text-anchor="end">child a</text>
+        <rect class="n-ghost" x="200" y="246" width="120" height="14" rx="2"/>
+        <text class="t-xs t-muted" x="260" y="257" text-anchor="middle">coroutine object only</text>
+        <text class="t-xs t-muted" x="330" y="257">Python warns: “never awaited”</text>
+        <text class="t-sm t-muted" x="572" y="257">never runs</text>
+
+        <line class="e-muted" x1="200" y1="274" x2="560" y2="274"/>
+        <line class="e-muted" x1="200" y1="274" x2="200" y2="279"/>
+        <line class="e-muted" x1="320" y1="274" x2="320" y2="279"/>
+        <line class="e-muted" x1="440" y1="274" x2="440" y2="279"/>
+        <line class="e-muted" x1="560" y1="274" x2="560" y2="279"/>
+        <text class="t-xs t-muted" x="200" y="290" text-anchor="middle">0</text>
+        <text class="t-xs t-muted" x="320" y="290" text-anchor="middle">1 s</text>
+        <text class="t-xs t-muted" x="440" y="290" text-anchor="middle">2 s</text>
+        <text class="t-xs t-muted" x="560" y="290" text-anchor="middle">3 s</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 10.4</b>Three children of one second each, started three ways. Concurrency comes from <code>create_task</code>, not from <code>await</code>. Row b's children overlap because all three were scheduled before the parent waited on any of them. The gap between a dot and the start of its bar is exaggerated here; in reality it lasts only until the parent's next real await.</figcaption>
+  </figure>
+
+  <p class="code-label">Row b in code: create first, then wait</p>
+<pre><code><span class="k">async def</span> parent():
+    tasks = [asyncio.create_task(child(x)) <span class="k">for</span> x <span class="k">in</span> (<span class="s">"a"</span>, <span class="s">"b"</span>, <span class="s">"c"</span>)]
+    log(<span class="s">"created 3"</span>)                  <span class="c"># still the parent's turn: no child has run a line</span>
+    results = []
+    <span class="k">for</span> t <span class="k">in</span> tasks:
+        results.append(<span class="k">await</span> t)          <span class="c"># first real wait: now the children start</span>
+    <span class="k">return</span> results</code></pre>
+  <p>If you print from inside each child, “created 3” comes out first, before any child's first line. Three facts follow from that, and each one matters in a harness:</p>
+  <ul>
+    <li><strong>Creating is instant and cheap. Running is slow and costs tokens.</strong> The gap between the two is where a harness can validate and register a child before any of its code runs. Chapter 16 builds the whole <a href="16-spawning-and-delegation.html#lifecycle">spawn lifecycle</a> on this gap.</li>
+    <li><strong>Keep a reference to every task you create.</strong> The asyncio documentation warns that the event loop keeps only weak references to tasks. A task that nothing else refers to can be garbage-collected before it finishes.</li>
+    <li><strong>Every task needs an owner who awaits it.</strong> If a task that nobody awaits raises an exception, the error isn't raised anywhere. At best, asyncio logs “Task exception was never retrieved” when the task object is cleaned up. In a swarm, a child with no owner is an <strong>orphan</strong>: it keeps spending, and no one hears about it when it fails.</li>
+  </ul>
+  <div class="box project">
+    <span class="box-label">In your swarm harness · Stage 0A</span>
+    <ul>
+      <li><strong>Exercise 1.</strong> Before you measure, write the total time for “one after another” and for <code>gather</code>, using the sum-versus-longest rule from Figure 10.1. If your measurement is off by more than a few milliseconds, find out where the extra time went.</li>
+      <li><strong>Exercise 2.</strong> Predict two things: what a task you create but never await actually does, and what happens to it if <code>main()</code> returns first. Use the ready-queue model from Figure 10.3, not intuition. Then check: what does <code>asyncio.run</code> do with tasks that are still pending when <code>main()</code> returns? Find out by experiment, not by searching.</li>
+    </ul>
+  </div>
+
+  <h2 id="gather-taskgroup" data-short="gather vs TaskGroup">gather, TaskGroup and structured concurrency</h2>
+  <p>Creating tasks one by one and awaiting each in a loop works, but you'll usually want one call that starts a group of children and waits for all of them. asyncio has two, and the difference between them is mostly about <em>what happens when one child fails</em>.</p>
+
+  <h3>asyncio.gather</h3>
+  <p class="code-label">gather: start all, wait for all</p>
+<pre><code>results = <span class="k">await</span> asyncio.gather(child(<span class="s">"A"</span>), child(<span class="s">"B"</span>), child(<span class="s">"C"</span>))
+<span class="c"># results is in argument order: [A's result, B's result, C's result],</span>
+<span class="c"># whichever child finished first</span>
+
+results = <span class="k">await</span> asyncio.gather(child(<span class="s">"A"</span>), child(<span class="s">"B"</span>), child(<span class="s">"C"</span>),
+                               return_exceptions=<span class="k">True</span>)
+<span class="c"># a child that raised gives its exception object in its slot</span></code></pre>
+  <p><code>gather</code> wraps each coroutine in a task and runs them concurrently. Results always come back in the order you passed the children in, not the order they finished. Its failure behavior, from the documentation:</p>
+  <ul>
+    <li><strong>Default:</strong> the first exception is passed straight to the code awaiting <code>gather</code>. The other children are <em>not</em> cancelled. They keep running, but nobody is waiting for their results anymore.</li>
+    <li><strong><code>return_exceptions=True</code>:</strong> exceptions are treated like results. <code>gather</code> waits for every child and puts each exception object in that child's slot.</li>
+    <li><strong>If <code>gather</code> itself is cancelled,</strong> it cancels every child that hasn't finished yet.</li>
+  </ul>
+
+  <h3>asyncio.TaskGroup</h3>
+  <p class="code-label">TaskGroup (Python 3.11+): the block owns its tasks</p>
+<pre><code><span class="k">try</span>:
+    <span class="k">async with</span> asyncio.TaskGroup() <span class="k">as</span> tg:
+        ta = tg.create_task(child(<span class="s">"A"</span>))
+        tb = tg.create_task(child(<span class="s">"B"</span>))
+        tc = tg.create_task(child(<span class="s">"C"</span>))
+    <span class="c"># reaching this line means every task in the group finished without error</span>
+    results = [ta.result(), tb.result(), tc.result()]
+<span class="k">except*</span> ValueError <span class="k">as</span> eg:                 <span class="c"># except* matches inside an ExceptionGroup</span>
+    <span class="k">for</span> err <span class="k">in</span> eg.exceptions:
+        log(<span class="s">"child failed"</span>, err)</code></pre>
+  <p>A TaskGroup has one rule: <strong>the <code>async with</code> block can't exit until every task created in it has finished.</strong> When a task in the group fails with any exception other than <code>CancelledError</code>, the group cancels all the others and waits for them to finish. Then it raises an <code>ExceptionGroup</code> holding every real error, even if there's only one. You catch it with <code>except*</code> (PEP 654).</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 262" role="img" aria-label="Three panels, each with children A and C that need 3 seconds and child B that raises at 1 second. Panel 1, gather default: at 1 second the caller's await raises B's ValueError, while A and C keep running to 3 seconds with nobody waiting for them. Panel 2, gather with return_exceptions true: all three run to the end, and at 3 seconds the caller gets a list in argument order with B's ValueError in the middle. Panel 3, TaskGroup: at 1 second the group cancels A and C, their finally blocks run, and the caller gets an ExceptionGroup containing the ValueError.">
+        <!-- panel 1: gather default -->
+        <rect class="n-group" x="12" y="8" width="236" height="246" rx="8"/>
+        <text class="t-sm t-b" x="22" y="28">gather (default)</text>
+        <text class="t-xs t-muted" x="22" y="44">the first error goes straight to you</text>
+        <text class="t-xs" x="22" y="74">child A</text>
+        <text class="t-xs" x="22" y="98">child B</text>
+        <text class="t-xs" x="22" y="122">child C</text>
+        <rect class="n-accent" x="82" y="62" width="50" height="16" rx="2"/>
+        <rect class="n-ghost" x="132" y="62" width="100" height="16" rx="2"/>
+        <text class="t-xs t-muted" x="182" y="74" text-anchor="middle">still running</text>
+        <rect class="n-accent" x="82" y="86" width="50" height="16" rx="2"/>
+        <text class="t-b t-red" x="137" y="99">✗</text>
+        <text class="t-xs t-red" x="150" y="98">raises</text>
+        <rect class="n-accent" x="82" y="110" width="50" height="16" rx="2"/>
+        <rect class="n-ghost" x="132" y="110" width="100" height="16" rx="2"/>
+        <text class="t-xs t-muted" x="182" y="122" text-anchor="middle">still running</text>
+        <line class="e-red e-dash" x1="132" y1="56" x2="132" y2="134"/>
+        <line class="e-line" x1="82" y1="140" x2="232" y2="140"/>
+        <text class="t-xs t-muted" x="82" y="152" text-anchor="middle">0</text>
+        <text class="t-xs t-muted" x="132" y="152" text-anchor="middle">1 s</text>
+        <text class="t-xs t-muted" x="232" y="152" text-anchor="middle">3 s</text>
+        <text class="t-xs t-red" x="22" y="178">At 1 s your await raises B's ValueError.</text>
+        <text class="t-xs" x="22" y="194">A and C keep running until 3 s.</text>
+        <text class="t-xs" x="22" y="210">Nobody awaits them; their results are lost.</text>
+
+        <!-- panel 2: return_exceptions -->
+        <rect class="n-group" x="262" y="8" width="236" height="246" rx="8"/>
+        <text class="t-sm t-b" x="272" y="28">gather(return_exceptions=True)</text>
+        <text class="t-xs t-muted" x="272" y="44">errors come back as values</text>
+        <text class="t-xs" x="272" y="74">child A</text>
+        <text class="t-xs" x="272" y="98">child B</text>
+        <text class="t-xs" x="272" y="122">child C</text>
+        <rect class="n-accent" x="332" y="62" width="150" height="16" rx="2"/>
+        <rect class="n-accent" x="332" y="86" width="50" height="16" rx="2"/>
+        <text class="t-b t-amber" x="387" y="99">✗</text>
+        <text class="t-xs t-amber" x="400" y="98">kept as a value</text>
+        <rect class="n-accent" x="332" y="110" width="150" height="16" rx="2"/>
+        <line class="e-accent e-dash" x1="482" y1="56" x2="482" y2="134"/>
+        <line class="e-line" x1="332" y1="140" x2="482" y2="140"/>
+        <text class="t-xs t-muted" x="332" y="152" text-anchor="middle">0</text>
+        <text class="t-xs t-muted" x="382" y="152" text-anchor="middle">1 s</text>
+        <text class="t-xs t-muted" x="482" y="152" text-anchor="middle">3 s</text>
+        <text class="t-xs t-accent" x="272" y="178">At 3 s you get a list, in argument order:</text>
+        <text class="t-mono" x="272" y="196">['A', ValueError('B'), 'C']</text>
+        <text class="t-xs" x="272" y="214">You decide what B's error means.</text>
+
+        <!-- panel 3: TaskGroup -->
+        <rect class="n-group" x="512" y="8" width="236" height="246" rx="8"/>
+        <text class="t-sm t-b" x="522" y="28">TaskGroup</text>
+        <text class="t-xs t-muted" x="522" y="44">one failure cancels the rest</text>
+        <text class="t-xs" x="522" y="74">child A</text>
+        <text class="t-xs" x="522" y="98">child B</text>
+        <text class="t-xs" x="522" y="122">child C</text>
+        <rect class="n-accent" x="582" y="62" width="50" height="16" rx="2"/>
+        <text class="t-xs t-muted" x="638" y="74">cancelled</text>
+        <rect class="n-accent" x="582" y="86" width="50" height="16" rx="2"/>
+        <text class="t-b t-red" x="637" y="99">✗</text>
+        <text class="t-xs t-red" x="650" y="98">raises</text>
+        <rect class="n-accent" x="582" y="110" width="50" height="16" rx="2"/>
+        <text class="t-xs t-muted" x="638" y="122">cancelled</text>
+        <line class="e-red e-dash" x1="632" y1="56" x2="632" y2="134"/>
+        <line class="e-line" x1="582" y1="140" x2="732" y2="140"/>
+        <text class="t-xs t-muted" x="582" y="152" text-anchor="middle">0</text>
+        <text class="t-xs t-muted" x="632" y="152" text-anchor="middle">1 s</text>
+        <text class="t-xs t-muted" x="732" y="152" text-anchor="middle">3 s</text>
+        <text class="t-xs" x="522" y="178">At 1 s the group cancels A and C;</text>
+        <text class="t-xs" x="522" y="194">their finally blocks run. Then you get</text>
+        <text class="t-mono t-red" x="522" y="212">ExceptionGroup([ValueError])</text>
+        <text class="t-xs" x="522" y="230">Handle it with except*.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 10.5</b>The same three children under three APIs. Child B raises at 1 s; A and C would need 3 s. Dashed bars are work that keeps running with nobody waiting for it. Only the TaskGroup guarantees that no child outlives the call. These timings match what Python 3.12 actually prints for this setup.</figcaption>
+  </figure>
+
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th></th><th>gather (default)</th><th>gather, return_exceptions=True</th><th>TaskGroup</th></tr></thead>
+      <tbody>
+        <tr><td><strong>When one child raises</strong></td><td>You see it at once</td><td>It's stored in that child's slot</td><td>The group cancels the others</td></tr>
+        <tr><td><strong>The other children</strong></td><td>Keep running, unobserved</td><td>Run to completion</td><td>Cancelled; their cleanup runs</td></tr>
+        <tr><td><strong>What you get</strong></td><td>The first exception</td><td>A list of values and exceptions</td><td>An ExceptionGroup of all real errors</td></tr>
+        <tr><td><strong>Can a child outlive the call?</strong></td><td>Yes, after an error</td><td>No</td><td>No</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box pitfall">
+    <span class="box-label">Pitfall</span>
+    <p><code>return_exceptions=True</code> makes failure easy to forget. You get back a list and loop over it as if every item were a result. An exception object in that list looks like any other value until you check its type. A child that was <em>cancelled</em> shows up there too, as a <code>CancelledError</code> instance.</p>
+  </div>
+
+  <h3>Structured concurrency</h3>
+  <p>Nathaniel J. Smith's 2018 essay “Notes on structured concurrency, or: Go statement considered harmful” explains why the TaskGroup rule matters. A bare “start this in the background” call, like Go's <code>go</code> statement or a <code>create_task</code> nobody awaits, lets a function start work that outlives it. That breaks three things you normally rely on:</p>
+  <ol>
+    <li><strong>You can't tell from a call whether it left something running.</strong> A function that returned may still have live tasks behind it.</li>
+    <li><strong>Errors have nowhere to go.</strong> The code that started the work has moved on, so there's no caller left to raise into.</li>
+    <li><strong>Cancellation can't find the work.</strong> Cancelling the caller doesn't reach a task it never linked to.</li>
+  </ol>
+  <p>Structured concurrency's fix is one rule: concurrent tasks live inside a block, and the block doesn't exit until all of them have finished. The essay's library, Trio, calls that block a <em>nursery</em>. asyncio's TaskGroup applies the same rule. With it, every task's lifetime is visible in the indentation of your code, errors flow to the parent, and cancelling the parent reaches every child.</p>
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>An agent tree is a structured-concurrency tree.</strong> Every child should finish inside its parent's lifetime, the same way every task finishes inside its TaskGroup block. The spawn tree in your trace and the task tree in memory should be the same tree. A child still running after its parent returned is the orphan your Stage 3 acceptance criteria forbid.</p>
+  </div>
+  <p>Structure and failure policy are separate questions, though. TaskGroup's “one failure cancels the rest” is right for tightly coupled work, and usually wrong for independent children (Chapter 11, <a href="11-reliability.html#errors-as-values">errors as values</a>).</p>
+  <div class="box project">
+    <span class="box-label">In your swarm harness · Stage 0A and Stage 3</span>
+    <ul>
+      <li><strong>Exercises 3 and 7.</strong> Figure 10.5 gives away the basic case, so make your prediction harder. Add a twist: child A also raises, at 2 s. For each of the three panels, write down exactly what is printed, and when, before you run it.</li>
+      <li><strong>Stage 3.</strong> Suppose your agent boundary turns every failure into a Result, so no child ever raises. What does a TaskGroup still give you that <code>gather</code> doesn't? What would you lose by using it?</li>
+      <li><strong>Stage 3.</strong> “Parents wait for required children.” Which of the three shapes lets a parent stop waiting for an <em>optional</em> child without leaving it running? What extra code does each shape need?</li>
+      <li><strong>Stage 3.</strong> Results must be matched to their agents “regardless of completion order”. <code>gather</code> already returns results in argument order. Is that enough, or do you want each Result to carry its agent id anyway? What breaks in the trace if it doesn't?</li>
+    </ul>
+  </div>
+
+  <h2 id="cancellation">Cancellation: a request, delivered at an await</h2>
+  <p><code>task.cancel()</code> doesn't stop anything on the spot. It records a request. The next time the task is resumed, asyncio raises <code>CancelledError</code> <em>inside the coroutine</em>, at the <code>await</code> where it was suspended. From there it's an ordinary exception climbing the child's stack. Five consequences follow:</p>
+  <ol>
+    <li><strong>Cancellation arrives only at an await.</strong> A task stuck in a CPU loop or a blocking call can't be cancelled until it next awaits.</li>
+    <li><strong>Cleanup runs.</strong> As the exception unwinds the stack, every <code>finally</code> block and every <code>async with</code> exit runs. That's where cleanup belongs: give back a semaphore slot, close a streaming response, write the “cancelled” trace event.</li>
+    <li><strong>A task cancelled before it starts never runs at all.</strong> Not its first line, and not its <code>finally</code> either. If your “agent started” and “agent ended” events are written inside the coroutine, a child cancelled while still in the ready queue leaves no trace events at all.</li>
+    <li><strong>Cancellation flows down linked awaits.</strong> Cancelling a task that is awaiting another task, a <code>gather</code> or a TaskGroup also cancels what it's awaiting. A task that nobody awaits isn't linked to anything, so it keeps running when its creator is cancelled. That's how orphans get made.</li>
+    <li><strong>It isn't caught by <code>except Exception</code>.</strong> Since Python 3.8, <code>CancelledError</code> inherits from <code>BaseException</code>. That's deliberate. But a bare <code>except:</code> or <code>except BaseException:</code> <em>does</em> catch it.</li>
+  </ol>
+
+  <h3>Why you must not swallow it</h3>
+  <p>If a coroutine catches <code>CancelledError</code> and doesn't re-raise it, the request is lost and the task carries on as if nothing had happened. The documentation warns that TaskGroup and <code>asyncio.timeout()</code> are built on cancellation internally, and can misbehave if a coroutine swallows it. You can see this directly: a coroutine that swallows the error inside a 0.7-second timeout runs to completion at 1.2 seconds, and <em>no</em> <code>TimeoutError</code> is raised.</p>
+  <div class="cols-2">
+    <div>
+      <p class="code-label">Wrong: cancellation becomes an ordinary value</p>
+<pre><code><span class="k">async def</span> child(job):
+    <span class="k">try</span>:
+        <span class="k">return await</span> do_work(job)
+    <span class="k">except</span> BaseException <span class="k">as</span> e:  <span class="c"># catches CancelledError</span>
+        <span class="k">return</span> {<span class="s">"ok"</span>: <span class="k">False</span>, <span class="s">"err"</span>: repr(e)}</code></pre>
+    </div>
+    <div>
+      <p class="code-label">Right: record, clean up, let it travel</p>
+<pre><code><span class="k">async def</span> child(job):
+    <span class="k">try</span>:
+        <span class="k">return await</span> do_work(job)
+    <span class="k">except</span> asyncio.CancelledError:
+        note(<span class="s">"cancelled"</span>, job)     <span class="c"># quick and local</span>
+        <span class="k">raise</span>                       <span class="c"># required</span>
+    <span class="k">except</span> Exception <span class="k">as</span> e:
+        <span class="k">return</span> {<span class="s">"ok"</span>: <span class="k">False</span>, <span class="s">"err"</span>: repr(e)}
+    <span class="k">finally</span>:
+        release(job)                <span class="c"># runs on every exit</span></code></pre>
+    </div>
+  </div>
+  <p>Cleanup in a <code>finally</code> may itself <code>await</code>, for example to write a trace line. Keep it short, though. If someone cancels the task again while that await is in progress, for instance an outer timeout firing, the cleanup is interrupted too. Suppressing cancellation on purpose is almost never right in a harness. If you ever must, the documentation says to call <code>Task.uncancel()</code> as well.</p>
+  <div class="box pitfall">
+    <span class="box-label">Pitfall · the catch-all boundary</span>
+    <p>The “wrong” version above is exactly what a well-meaning error boundary looks like: “catch everything and return a failed Result, so one child can't crash the parent.” It also makes the child impossible to stop. Your Stage 3 break-it list includes “a child ignores cancellation”. This is how that child gets written by accident. Chapter 11's boundary rule, “let cancellation pass through”, exists because of this.</p>
+  </div>
+
+  <h2 id="timeouts-limits" data-short="Timeouts and semaphores">Timeouts and semaphores</h2>
+  <h3>A timeout is a scheduled cancellation</h3>
+  <p class="code-label">Python 3.11+: bound a block of awaits</p>
+<pre><code><span class="k">try</span>:
+    <span class="k">async with</span> asyncio.timeout(<span class="n">30</span>):          <span class="c"># or asyncio.timeout_at(deadline)</span>
+        reply = <span class="k">await</span> call_model(prompt)
+<span class="k">except</span> TimeoutError:
+    ...                                        <span class="c"># the call took longer than 30 s</span></code></pre>
+  <p>Here's what happens inside. On entry, the context manager sets a timer on the event loop. If the block is still running when the timer fires, the timer cancels the current task. <code>CancelledError</code> is raised at whatever <code>await</code> the block is suspended on, the <code>finally</code> blocks below it run, and when the exception reaches the end of the <code>async with</code>, it is turned into a <code>TimeoutError</code>. In Python 3.11 and later, <code>asyncio.TimeoutError</code> is the same class as the built-in <code>TimeoutError</code>. Before 3.11, the tool was <code>asyncio.wait_for(aw, timeout)</code>, which still exists.</p>
+  <p>So a timeout is only as good as the cancellation underneath it. Everything in the previous section applies: it fires only at an await, it runs your cleanup, and a coroutine that swallows cancellation defeats it. <code>asyncio.timeout_at()</code> takes an absolute deadline on the loop's clock instead of a duration. That's the form you need for Chapter 11's rule, “pass deadlines, not durations”. How deadlines nest down a tree, and what values to pick, are policy, and Chapter 11 covers them (<a href="11-reliability.html#timeouts">timeouts at every level</a>).</p>
+
+  <h3>A semaphore bounds how many run at once</h3>
+  <p>A <strong>semaphore</strong> is a counter of free slots. <code>async with sem:</code> takes a slot, or waits until one is free, and gives it back on exit, even when the block raises or is cancelled. With a semaphore of 4 around the model call, at most 4 calls are in flight no matter how many agents exist.</p>
+  <p class="code-label">At most 4 model calls in flight, however many agents exist</p>
+<pre><code>llm_slots = asyncio.Semaphore(<span class="n">4</span>)
+
+<span class="k">async def</span> call_model(request):
+    <span class="k">async with</span> llm_slots:                 <span class="c"># waits here while 4 calls are in flight</span>
+        <span class="k">return await</span> client.send(request)   <span class="c"># the slot is released on any exit</span></code></pre>
+  <p>Three things a semaphore is not:</p>
+  <ul>
+    <li><strong>Not a rate limiter.</strong> Providers usually limit requests and tokens <em>per minute</em>. A semaphore limits how many calls are in flight at the same moment. Four slots with fast calls can still exceed a per-minute limit. Handling 429 responses is Chapter 11's job.</li>
+    <li><strong>Not a fairness guarantee you should rely on.</strong> Don't build logic that depends on which waiting task gets the next slot. Stage 0A exercise 6 asks you to observe the order. Note what you see, and don't design around it.</li>
+    <li><strong>Not free of deadlock.</strong> Where you put it matters. A slot held by a task that is waiting for something that also needs a slot can never be given back.</li>
+  </ul>
+  <div class="box project">
+    <span class="box-label">In your swarm harness · Stage 0A and Stage 3</span>
+    <ul>
+      <li><strong>Exercise 4.</strong> Before running it, predict the task's final state in both versions: catching <code>CancelledError</code> and re-raising it, and catching it and returning. What does <code>task.cancelled()</code> say in each? What does the code that awaits the task see?</li>
+      <li><strong>Exercise 6.</strong> Six tasks, two slots. Before running, draw the timeline in the style of Figure 10.1. Then run it and compare.</li>
+      <li><strong>Stage 3.</strong> Your spec asks: with a global limit of 2 and a tree three levels deep, can the run deadlock? Put the semaphore around a whole agent's run, not just its model call. Trace by hand what each of the two slot-holders is doing once both have spawned children. Then decide where your limit goes, and log why.</li>
+      <li><strong>Stage 3.</strong> A timeout fires while a child is in the middle of spawning its own children. Using the five consequences in the cancellation section, list what has and hasn't happened to those grandchildren. Which statuses will they end up with?</li>
+    </ul>
+  </div>
+
+  <h2 id="races">Races across an await</h2>
+  <p>A <strong>race condition</strong> is a bug where the result depends on the order in which concurrent tasks happen to interleave. With threads, an interleaving can happen almost anywhere. With asyncio, it can happen only at an await that suspends. That's a huge help, because you can point at every spot where it can go wrong. It doesn't make races go away, though.</p>
+  <p>The classic shape is <strong>check-then-act</strong>: read some shared state, decide based on it, then change it. If an <code>await</code> sits between the check and the act, another task can run in the gap, check the same, still-unchanged state, and make the same decision. Here's the version every swarm harness writes at least once:</p>
+  <p class="code-label">The bug: the check and the deduction are separated by an await</p>
+<pre><code>budget = {<span class="s">"left"</span>: <span class="n">8000</span>}
+
+<span class="k">async def</span> child(name, cost=<span class="n">5000</span>):
+    <span class="k">if</span> budget[<span class="s">"left"</span>] &gt;= cost:          <span class="c"># check</span>
+        <span class="hl">reply = <span class="k">await</span> call_model()</span>       <span class="c"># suspends: the other child runs here</span>
+        budget[<span class="s">"left"</span>] -= cost            <span class="c"># act, on a stale decision</span>
+
+<span class="k">await</span> asyncio.gather(child(<span class="s">"A"</span>), child(<span class="s">"B"</span>))   <span class="c"># left ends at -2000</span></code></pre>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 306" role="img" aria-label="Two interleavings, steps 1 to 6, with time going down. Left, the bug: A checks 8000 at least 5000 and passes, then awaits the model and is suspended. B checks, still sees 8000, passes, and awaits. A resumes and deducts 5000, leaving 3000. B resumes and deducts 5000, leaving minus 2000. Right, the fix: A reserves 5000 in one step with no await, leaving 3000, then awaits. B tries to reserve, sees 3000, and is refused or queued. A resumes, used 4200, and 800 is refunded, leaving 3800.">
+        <!-- bug panel -->
+        <rect class="n-group" x="12" y="10" width="360" height="286" rx="8"/>
+        <text class="t-b t-red" x="24" y="32">Bug: check, then await, then act</text>
+        <text class="t-xs t-b t-muted" x="28" y="54" text-anchor="middle">step</text>
+        <text class="t-xs t-b t-muted" x="100" y="54" text-anchor="middle">child A</text>
+        <text class="t-xs t-b t-muted" x="228" y="54" text-anchor="middle">child B</text>
+        <text class="t-xs t-b t-muted" x="330" y="54" text-anchor="middle">left</text>
+
+        <text class="t-xs t-muted" x="28" y="77" text-anchor="middle">1</text>
+        <rect class="n-amber" x="40" y="62" width="120" height="22" rx="4"/><text class="t-xs" x="100" y="77" text-anchor="middle">check: 8000 ≥ 5000 ✓</text>
+        <text class="t-mono" x="330" y="77" text-anchor="middle">8000</text>
+
+        <text class="t-xs t-muted" x="28" y="107" text-anchor="middle">2</text>
+        <rect class="n-sunken" x="40" y="92" width="120" height="22" rx="4"/><text class="t-xs" x="100" y="107" text-anchor="middle">await call_model()</text>
+        <text class="t-mono" x="330" y="107" text-anchor="middle">8000</text>
+
+        <text class="t-xs t-muted" x="28" y="137" text-anchor="middle">3</text>
+        <rect class="n-amber" x="168" y="122" width="120" height="22" rx="4"/><text class="t-xs" x="228" y="137" text-anchor="middle">check: 8000 ≥ 5000 ✓</text>
+        <text class="t-mono" x="330" y="137" text-anchor="middle">8000</text>
+
+        <text class="t-xs t-muted" x="28" y="167" text-anchor="middle">4</text>
+        <rect class="n-sunken" x="168" y="152" width="120" height="22" rx="4"/><text class="t-xs" x="228" y="167" text-anchor="middle">await call_model()</text>
+        <text class="t-mono" x="330" y="167" text-anchor="middle">8000</text>
+
+        <text class="t-xs t-muted" x="28" y="197" text-anchor="middle">5</text>
+        <rect x="40" y="182" width="120" height="22" rx="4"/><text class="t-xs" x="100" y="197" text-anchor="middle">left −= 5000</text>
+        <text class="t-mono" x="330" y="197" text-anchor="middle">3000</text>
+
+        <text class="t-xs t-muted" x="28" y="227" text-anchor="middle">6</text>
+        <rect class="n-red" x="168" y="212" width="120" height="22" rx="4"/><text class="t-xs" x="228" y="227" text-anchor="middle">left −= 5000</text>
+        <text class="t-mono t-red t-b" x="330" y="227" text-anchor="middle">−2000</text>
+
+        <line class="e-muted e-dash" x1="100" y1="114" x2="100" y2="180"/>
+        <text class="t-xs t-muted" x="106" y="150">A suspended</text>
+        <line class="e-muted e-dash" x1="228" y1="174" x2="228" y2="210"/>
+        <text class="t-xs t-muted" x="234" y="196">B suspended</text>
+
+        <text class="t-xs" x="24" y="256">Both checks ran before either deduction:</text>
+        <text class="t-xs" x="24" y="271">the await let B run inside A's check-then-act gap.</text>
+        <text class="t-xs t-red" x="24" y="286">The run ends 2,000 tokens over budget.</text>
+
+        <!-- fix panel -->
+        <rect class="n-group" x="388" y="10" width="360" height="286" rx="8"/>
+        <text class="t-b t-accent" x="400" y="32">Fix: reserve before the await</text>
+        <text class="t-xs t-b t-muted" x="404" y="54" text-anchor="middle">step</text>
+        <text class="t-xs t-b t-muted" x="476" y="54" text-anchor="middle">child A</text>
+        <text class="t-xs t-b t-muted" x="604" y="54" text-anchor="middle">child B</text>
+        <text class="t-xs t-b t-muted" x="706" y="54" text-anchor="middle">left</text>
+
+        <text class="t-xs t-muted" x="404" y="77" text-anchor="middle">1</text>
+        <rect class="n-accent" x="416" y="62" width="120" height="22" rx="4"/><text class="t-xs" x="476" y="77" text-anchor="middle">reserve 5000: ok</text>
+        <text class="t-mono t-b" x="706" y="77" text-anchor="middle">3000</text>
+
+        <text class="t-xs t-muted" x="404" y="107" text-anchor="middle">2</text>
+        <rect class="n-sunken" x="416" y="92" width="120" height="22" rx="4"/><text class="t-xs" x="476" y="107" text-anchor="middle">await call_model()</text>
+        <text class="t-mono" x="706" y="107" text-anchor="middle">3000</text>
+
+        <text class="t-xs t-muted" x="404" y="137" text-anchor="middle">3</text>
+        <rect class="n-amber" x="544" y="122" width="120" height="22" rx="4"/><text class="t-xs" x="604" y="137" text-anchor="middle">reserve 5000: no</text>
+        <text class="t-mono" x="706" y="137" text-anchor="middle">3000</text>
+
+        <text class="t-xs t-muted" x="404" y="167" text-anchor="middle">4</text>
+        <rect x="544" y="152" width="120" height="22" rx="4"/><text class="t-xs" x="604" y="167" text-anchor="middle">refused or queued</text>
+        <text class="t-mono" x="706" y="167" text-anchor="middle">3000</text>
+
+        <text class="t-xs t-muted" x="404" y="197" text-anchor="middle">5</text>
+        <rect x="416" y="182" width="120" height="22" rx="4"/><text class="t-xs" x="476" y="197" text-anchor="middle">used 4200: refund 800</text>
+        <text class="t-mono t-accent t-b" x="706" y="197" text-anchor="middle">3800</text>
+
+        <line class="e-muted e-dash" x1="476" y1="114" x2="476" y2="180"/>
+        <text class="t-xs t-muted" x="482" y="150">A suspended</text>
+
+        <text class="t-xs" x="400" y="256">Check and deduct happen together, with no await between.</text>
+        <text class="t-xs" x="400" y="271">B sees A's reservation, so the total can't overshoot.</text>
+        <text class="t-xs t-muted" x="400" y="286">What B does next, and the refund rules: Chapter 11.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 10.6</b>The same two children, two interleavings. On the left, step 3 is the bug: B checks a number that A has already decided to spend but hasn't deducted yet. On the right, A's decision and its deduction happen in one step with no await between, so there's no gap for B to run in. The numbers match the example in Chapter 11.</figcaption>
+  </figure>
+
+  <p>Two fixes, and what each one costs:</p>
+  <div class="cols-2">
+    <div class="card">
+      <h4>Reserve before the await</h4>
+      <p>Do the check and the deduction in one stretch of code with <strong>no <code>await</code> inside it</strong>. On one event loop, nothing else can run in that stretch, so it's atomic without a lock. Settle up afterwards, when the real usage is known.</p>
+<pre><code><span class="k">if</span> budget[<span class="s">"left"</span>] &lt; cost:            <span class="c"># check ...</span>
+    <span class="k">return</span> refuse()
+budget[<span class="s">"left"</span>] -= cost                <span class="c"># ... and act: no await between</span>
+reply = <span class="k">await</span> call_model()</code></pre>
+      <p class="small muted">Costs: you need a worst-case estimate up front, and something has to refund the difference afterwards.</p>
+    </div>
+    <div class="card">
+      <h4>A lock around check-and-act</h4>
+      <p>An <code>asyncio.Lock</code> lets only one task at a time into a block, even one that awaits. You need it when the critical section <em>must</em> await, for example when the budget lives in a database or a file you have to read and write.</p>
+<pre><code><span class="k">async with</span> budget_lock:
+    left = <span class="k">await</span> ledger.read()
+    <span class="k">if</span> left &gt;= cost:
+        <span class="k">await</span> ledger.write(left - cost)</code></pre>
+      <p class="small muted">Costs: every task queues at the lock. Hold it across the model call and you've made your swarm sequential again.</p>
+    </div>
+  </div>
+  <p>Notice that the lock version still reserves before the model call. The lock protects the read-check-write, never the slow work. Two more limits on these fixes: an <code>asyncio.Lock</code> coordinates tasks on one event loop and doesn't protect state shared with threads (that needs a <code>threading.Lock</code>). And neither fix helps across processes, where the state isn't shared to begin with.</p>
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>Every <code>await</code> between reading shared state and writing it is a door.</strong> To review concurrent code, find each piece of shared state (budget, agent counter, registry, a claimed-task set) and look at the lines between where it's read and where it's written. If there's an await in that stretch, either move the write above it or put a lock around it. This is the race behind Stage 3's “spawning at the exact moment the maximum agent count is reached”. It's the same shape with a counter instead of a budget.</p>
+  </div>
+  <div class="box project">
+    <span class="box-label">In your swarm harness · Stage 3</span>
+    <ul>
+      <li>Write the failing test before the fix. Launch 10 children at once against a budget that fits 6, with a fake model call that awaits. What exact numbers should the test assert? Does your current code fail it? If it doesn't, is there an await in the gap at all?</li>
+      <li>List every piece of state in your harness that more than one task can change. For each one, write the line that reads it and the line that writes it, and whether an <code>await</code> sits between them.</li>
+      <li>Which fix fits your budget object, reservation or lock? What would make you switch to the other one later?</li>
+      <li>Your agent-count limit and your token budget are both check-then-act. Do they need to be reserved <em>together</em>, in one step? What goes wrong if a child passes one and fails the other?</li>
+    </ul>
+  </div>
+
+  <h2 id="blocking" data-short="Blocking calls">Blocking calls and asyncio.to_thread</h2>
+  <p>A <strong>blocking call</strong> holds the thread until it returns, without ever awaiting. Common ones: <code>time.sleep</code>, <code>requests.get</code>, a synchronous SDK client, <code>subprocess.run</code>, reading a large file with <code>open().read()</code>, and any heavy computation. Inside a coroutine, a blocking call doesn't just make <em>that</em> task slow. It freezes the whole event loop: every other task, every timer and every timeout waits until it returns (Figure 10.3: nothing can interrupt a running step).</p>
+  <p class="code-label">One blocking call stalls everyone</p>
+<pre><code><span class="k">async def</span> heartbeat():                    <span class="c"># prints every 0.25 s, when it can</span>
+    <span class="k">for</span> _ <span class="k">in</span> range(<span class="n">6</span>):
+        print(<span class="s">f"beat {elapsed():.1f}"</span>)
+        <span class="k">await</span> asyncio.sleep(<span class="n">0.25</span>)
+
+<span class="k">async def</span> bad_tool():
+    <span class="k">await</span> asyncio.sleep(<span class="n">0.3</span>)
+    time.sleep(<span class="n">1.0</span>)                        <span class="c"># blocking: holds the thread for 1 s</span>
+
+<span class="k">await</span> asyncio.gather(heartbeat(), bad_tool())
+<span class="c"># beat 0.0   beat 0.3   beat 1.3   beat 1.6 ...   &lt;- a one-second hole</span></code></pre>
+  <p>In a swarm, that hole is every agent at once. Five agents whose replies arrived during the second have their data sitting unread in socket buffers, and their timeouts can't fire either. There are three ways out, in order of preference:</p>
+  <ol>
+    <li><strong>Use an async library.</strong> An async HTTP client, or the async client that many provider SDKs offer. Its waits are real awaits, so the loop keeps running.</li>
+    <li><strong>Move blocking I/O to a thread</strong> with <code>await asyncio.to_thread(func, *args)</code> (Python 3.9+). The function runs in a worker thread, and your coroutine awaits the result. The loop stays free.</li>
+    <li><strong>Move heavy CPU work to a process,</strong> for example with <code>loop.run_in_executor</code> and a <code>ProcessPoolExecutor</code>. Only a separate process gets past the GIL in standard CPython.</li>
+  </ol>
+  <p><code>to_thread</code> has three catches worth knowing before you rely on it:</p>
+  <ul>
+    <li><strong>It doesn't speed up CPU-bound Python.</strong> The documentation says that because of the GIL, <code>to_thread</code> can typically only make I/O-bound functions non-blocking.</li>
+    <li><strong>You can't cancel the thread.</strong> Cancelling the awaiting task stops the <em>waiting</em>. The function keeps running in its thread until it finishes, along with any side effects it has. A timeout around it gives you your control back, not the resources it's using.</li>
+    <li><strong>Shared state becomes thread-shared.</strong> Whatever the function touches can now be changed at any moment by another thread, and an <code>asyncio.Lock</code> doesn't protect it.</li>
+  </ul>
+  <div class="box note">
+    <span class="box-label">Finding blocking calls</span>
+    <p>Run with <code>asyncio.run(main(), debug=True)</code>, or set <code>PYTHONASYNCIODEBUG=1</code>. In debug mode, asyncio logs every step that holds the loop longer than 100 ms (<code>loop.slow_callback_duration</code>). That's often the fastest way to find the one synchronous call hiding in a tool.</p>
+  </div>
+  <div class="box project">
+    <span class="box-label">In your swarm harness · Stage 0A and Stage 3</span>
+    <ul>
+      <li><strong>Exercise 5.</strong> A timeout wraps a coroutine that calls <code>time.sleep</code>. Using only Figure 10.3 and the fact that a timeout is a scheduled cancellation, predict what happens. Does a <code>TimeoutError</code> appear at all? If it does, when? Write the prediction down, then run it. This is the exercise most people get wrong.</li>
+      <li><strong>Stage 3.</strong> Your trace writer appends lines to one JSONL file. Is the write a blocking call? How long could it hold the loop on a slow disk? Chapter 13 also asks whether two tasks' lines can get mixed together. Answer both from the await points in your writer.</li>
+      <li><strong>Stage 3.</strong> A dummy child that “hangs forever” is on your break-it list. Write it twice: once as <code>await asyncio.sleep(10**6)</code> and once as <code>time.sleep(10**6)</code>. Which one can your timeout stop? What does that tell you about the guarantee you can promise in Stage 3?</li>
+    </ul>
+  </div>
+
+  <h2 id="stage-map" data-short="Stage 0A → Stage 3">From your Stage 0A exercises to Stage 3</h2>
+  <p>Each Stage 0A exercise isolates one mechanism from this chapter. Each Stage 3 requirement depends on one or more of them. Use this table to check that every exercise answers a question you'll face again in Stage 3.</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Exercise</th><th>Mechanism</th><th>Section</th><th>The Stage 3 question it prepares</th></tr></thead>
+      <tbody>
+        <tr><td>1 · sleep, then gather</td><td>Overlapping waits</td><td><a href="#io-vs-cpu">I/O vs CPU</a></td><td>How will you <em>show</em>, by timing and by the trace, that children ran concurrently?</td></tr>
+        <tr><td>2 · create_task, never awaited</td><td>Create vs run; owners</td><td><a href="#create-vs-await">create_task</a></td><td>Which object in your harness owns each child task, and who awaits it?</td></tr>
+        <tr><td>3 · gather where one raises</td><td>Failure semantics</td><td><a href="#gather-taskgroup">gather vs TaskGroup</a></td><td>Fail fast, or collect everything and decide? Per parent or global?</td></tr>
+        <tr><td>4 · cancel, catch, swallow</td><td>Cancellation as a request</td><td><a href="#cancellation">Cancellation</a></td><td>What does cancellation mean for a child that is mid-spawn?</td></tr>
+        <tr><td>5 · timeout on a blocking call</td><td>Cooperative scheduling</td><td><a href="#blocking">Blocking calls</a></td><td>Which hangs can your timeouts stop, and which can't they?</td></tr>
+        <tr><td>6 · semaphore, 2 of 6</td><td>Bounded concurrency</td><td><a href="#timeouts-limits">Semaphores</a></td><td>Is the limit global, per parent or per depth, and how do you avoid the nested-wait deadlock?</td></tr>
+        <tr><td>7 · TaskGroup version of 3</td><td>Structured concurrency</td><td><a href="#gather-taskgroup">Structured concurrency</a></td><td>How do you prove a cancelled run leaves no running tasks?</td></tr>
+        <tr><td>(none yet)</td><td>Check-then-act across an await</td><td><a href="#races">Races</a></td><td>Are budgets correct under concurrent spawning? Write exercise 8 yourself.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>The last row is deliberate. Stage 0A has no exercise for the race, and it's the bug most likely to reach Stage 3 unnoticed, because it never shows up when children run one at a time. Writing that exercise yourself is good practice for writing the Stage 3 test.</p>
+
+  <div class="box pitfall">
+    <span class="box-label">Misconceptions to drop</span>
+    <ul>
+      <li>“<code>await</code> runs things concurrently.” It runs one thing and waits. Concurrency comes from creating tasks.</li>
+      <li>“asyncio has no race conditions because it's single-threaded.” It has fewer places for them: every await between a read and a write of shared state.</li>
+      <li>“<code>cancel()</code> stops the task.” It requests a stop, delivered at the task's next await, and the task can ignore it.</li>
+      <li>“A timeout guarantees the block ends on time.” Only if the code inside awaits, and doesn't swallow cancellation.</li>
+      <li>“Threads would be faster for model calls.” For waiting, one thread already overlaps the waits. Threads add OS switching and races almost anywhere.</li>
+      <li>“<code>to_thread</code> makes anything non-blocking.” It frees the loop. It doesn't make CPU-bound Python faster, and the thread can't be cancelled.</li>
+    </ul>
+  </div>
+
+  <h2 id="check">Check yourself</h2>
+  <p>Answer each one out loud or on paper before you open it.</p>
+  <div class="quiz">
+    <details>
+      <summary><span class="tag recall">Recall</span> What's the difference between concurrency and parallelism, and which one does an agent harness mostly need?</summary>
+      <div><p>Concurrency means several tasks are in progress with overlapping lifetimes. Parallelism means instructions execute at the same instant on different cores. A harness mostly needs concurrency, because its work is waiting on model and tool calls. One thread can overlap those waits. Parallelism matters only for CPU-heavy work, which in standard CPython means separate processes.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag recall">Recall</span> What does <code>asyncio.create_task(child())</code> do that <code>await child()</code> doesn't, and the other way round?</summary>
+      <div><p><code>create_task</code> wraps the coroutine in a new task, schedules it on the loop and returns immediately. The parent keeps running, and the child starts at the parent's next real await. <code>await child()</code> runs the child inside the current task and doesn't return until it's finished. It creates no new task, so it adds no concurrency. You also have to keep a reference to a created task and await it eventually, or its result and any error are lost.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> Eight agents each wait about 3 s for one model call. Estimate the wall-clock time run sequentially, with unlimited concurrency, and with a semaphore of 4 around the call.</summary>
+      <div><p>Sequential: 8 × 3 = 24 s. Unlimited: about 3 s, the longest single wait. With 4 slots: two waves of four, so about 6 s. The token bill is the same in all three cases. If the provider rate-limits you, the unlimited version may also be slower in practice, because of 429 responses and retries.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> A child wraps each of its steps in <code>try: ... except BaseException: continue</code>. The parent runs it under <code>async with asyncio.timeout(10)</code>, and the work takes 60 s. What happens at 10 s, and at the end?</summary>
+      <div><p>At 10 s, the timer cancels the task, and <code>CancelledError</code> is raised at the child's current await. The child's <code>except BaseException</code> catches it, and the loop carries on. The block runs until the work finishes at about 60 s. No <code>TimeoutError</code> is raised, because no cancellation reached the end of the <code>async with</code>. The timeout was silently defeated. The fix is to catch <code>Exception</code>, or to re-raise <code>CancelledError</code> after any quick bookkeeping.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> A tool inside an async agent calls <code>requests.get</code>, and the server takes 20 s to answer. Five other agents are mid-call. What happens to them, and what are the fixes?</summary>
+      <div><p>The whole event loop is frozen for 20 s. The other agents' replies wait unread, and their timers and timeouts can't fire. When the call returns, everything that came due runs late, all at once. Fixes: use an async HTTP client, or run the call with <code>await asyncio.to_thread(...)</code>. Remember that cancelling a <code>to_thread</code> await doesn't stop the thread, so give the blocking call its own timeout as well.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> Max agents is 10 and 9 exist. Two parents each run <code>if registry.count() &lt; MAX: await trace.write("spawning"); registry.add(child)</code>. What can go wrong? Give two fixes and what each costs.</summary>
+      <div><p>Both parents check, both see 9, both write to the trace (an await), and both add a child, so 11 agents exist. It's check-then-act across an await. Fix 1: register or reserve the slot before any await, as one synchronous step (check and add together), and write the trace afterwards. It costs you having to undo the reservation if the spawn then fails. Fix 2: hold an <code>asyncio.Lock</code> across the check, the trace write and the add. It's correct even with the await inside, but every spawn queues behind the lock, so the lock must never cover slow work.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> A parent has five independent children. It wants every child's outcome, including failures, and it must leave nothing running if it is itself cancelled. Which shapes meet both requirements, and which don't?</summary>
+      <div><p>Default <code>gather</code> fails the first requirement: the first error reaches the parent while the other children run on, unobserved. <code>gather(..., return_exceptions=True)</code> meets both: every outcome comes back in its slot, and cancelling the gather cancels the unfinished children. A TaskGroup meets both only if each child converts its own failures into values at its boundary (while letting cancellation through). Otherwise its fail-fast rule cancels the siblings. Choosing between the two working shapes is your Stage 3 decision. Weigh the lifetime guarantee of the block against the extra boundary code.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “Why would you build a multi-agent system on asyncio rather than threads?”</summary>
+      <div><p>A strong answer starts from the workload: agents are I/O-bound, so the goal is overlapping waits, and in standard CPython neither threads nor asyncio give Python code parallel CPU time. asyncio tasks are cheap, switches happen only at <code>await</code>, so races can only occur at visible points. Tasks can be cancelled, and TaskGroup gives structured lifetimes, so no orphans. Threads can't be cancelled from outside and can be switched almost anywhere. Then give the costs honestly: one blocking call freezes everything, you need async libraries or <code>to_thread</code>, CPU-heavy or untrusted work belongs in processes, and races across awaits are still real.</p></div>
+    </details>
+  </div>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><strong>Python documentation, asyncio:</strong> “Coroutines and Tasks”, “Synchronization Primitives” and “Developing with asyncio” (Python 3.11 and later).<span class="why">The authoritative semantics for <code>create_task</code>, <code>gather</code>, <code>TaskGroup</code>, <code>timeout</code>, cancellation, <code>to_thread</code> and debug mode. Re-check it when you upgrade Python.</span></li>
+    <li><strong>Nathaniel J. Smith, “Notes on structured concurrency, or: Go statement considered harmful”</strong> (2018).<span class="why">The argument for nurseries and task groups. Read it before you design your Stage 3 waiting logic.</span></li>
+    <li><strong>Nathaniel J. Smith, “Timeouts and cancellation for humans”</strong> (2018).<span class="why">Why timeouts should be scopes and deadlines rather than per-call arguments. The background to <code>asyncio.timeout</code> and to Chapter 11's deadline rule.</span></li>
+    <li><strong>Rob Pike, “Concurrency Is Not Parallelism”</strong> (talk, 2012).<span class="why">The distinction this chapter opens with, explained with gophers and books.</span></li>
+    <li><strong>David Beazley, “Python Concurrency From the Ground Up: LIVE!”</strong> (PyCon talk, 2015).<span class="why">Builds an event loop from generators and sockets on stage. Watching it makes Figure 10.3 concrete.</span></li>
+    <li><strong>Irit Katriel, Yury Selivanov and Guido van Rossum, PEP 654, “Exception Groups and except*”</strong> (2021).<span class="why">Why a TaskGroup raises an <code>ExceptionGroup</code>, and how <code>except*</code> matches inside one.</span></li>
+  </ul>
+
+  <section class="recall-card" aria-labelledby="recall-10">
+    <h2 id="recall-10" data-short="Recall card">Recall card</h2>
+    <p class="muted small">Five lines to rehearse. If you can expand each into a minute of explanation, you know this chapter.</p>
+    <ol>
+      <li>Agents are I/O-bound. Sequential time is the sum of the waits; concurrent time is the longest wait. Tokens don't change.</li>
+      <li>One event loop, one thread, one running task. A task gives up the thread only at an await that has to wait.</li>
+      <li><code>create_task</code> creates work, <code>await</code> waits for it. Every task needs an owner; a TaskGroup makes the owner the enclosing block.</li>
+      <li>Cancellation is a request delivered at the next await. <code>finally</code> runs. Never swallow <code>CancelledError</code>, because timeouts and TaskGroups depend on it.</li>
+      <li>Every await between reading and writing shared state is a door for a race. Reserve before the await, or lock the read-check-write.</li>
+    </ol>
+  </section>
+
+  <div class="done">
+    <input type="checkbox" id="done-toggle" data-chapter="10">
+    <label for="done-toggle">I can explain this chapter without notes<small>Saved in this browser only. It updates the count on the guide's home page.</small></label>
+  </div>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="09-control-flow-and-state.html"><small>Previous · Chapter 09</small>Control flow and state</a>
+    <a class="next" href="11-reliability.html"><small>Next · Chapter 11</small>Reliability engineering</a>
+  </nav>
+</main>
+<aside class="toc-rail" aria-label="On this page"><p class="toc-title">In this chapter</p><nav data-toc></nav></aside>
+</div>
+</body>
+</html>

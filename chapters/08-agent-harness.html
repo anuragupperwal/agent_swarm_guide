@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>What a Harness Is · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="../index.html">Loop <span>→</span> Swarm</a>
+    <div class="crumbs"><a href="../index.html">Guide</a> · Part 3 · The harness · Chapter 08</div>
+    <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+  </div>
+</header>
+
+<div class="page has-toc">
+<main class="chapter">
+  <header class="ch-head">
+    <p class="eyebrow"><b>Part 3 · The harness</b> · Chapter 08 · Level L3</p>
+    <h1>What a harness is</h1>
+    <p class="lede">An agent is a model plus a program. This chapter takes the program apart. You'll see its nine components, follow one request through all of them, and walk through a real harness, Claude Code. It ends with the rule your swarm harness is built on: the model proposes, the harness disposes.</p>
+    <ul class="ch-meta">
+      <li><b>45 min</b> reading</li>
+      <li>Builds on: <b>Chapters 01–04</b></li>
+      <li>Your project: <b>Stages 1–5</b></li>
+    </ul>
+    <ol class="where" aria-label="Where this chapter sits in the guide">
+      <li class="past"><span>Part 1</span>Foundations</li>
+      <li class="past"><span>Part 2</span>Thinking &amp; memory</li>
+      <li class="here"><span>Part 3</span>The harness</li>
+      <li><span>Part 4</span>Multi-agent</li>
+      <li><span>Part 5</span>Together</li>
+    </ol>
+  </header>
+
+  <details class="toc-mobile"><summary>In this chapter</summary><div data-toc></div></details>
+
+  <div class="box predict">
+    <span class="box-label">Predict first · 10 min</span>
+    <p>Write answers in <code>docs/LEARNING_NOTES.md</code> under “Guide ch08”. Tag each one <em>sure</em> or <em>guess</em>. Don't read on until you're done.</p>
+    <ol>
+      <li>Besides the model, how many separate components does a single-agent harness need? Write a number first, then list them.</li>
+      <li>The model returns a <code>tool_use</code> asking to delete every file in the project. Which component should stop it? At what moment in the flow does that check run?</li>
+      <li>Is LangGraph a harness? Is a provider's Python SDK? Is Claude Code? Write one sentence for each.</li>
+    </ol>
+  </div>
+
+  <h2 id="big-idea">The big idea</h2>
+  <p>Chapter 01 ended with a table. Every limitation of the model (it's stateless, it can't act, it can't stop itself, it costs money) mapped to a job that code around it must do. That code has a name: the <strong>harness</strong>.</p>
+  <p>The word has two useful meanings, and both apply. A horse's harness doesn't make the power; it channels it into a cart and gives the driver the reins. A <em>test</em> harness is the code that drives a component, feeds it inputs and records what it does. An agent harness does both. It turns the model's text into actions in the world, and it keeps the operator in control while that happens.</p>
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>Agent = model + harness.</strong> The harness is everything except the weights: the loop, the tools, what goes into the context, what is allowed, what it costs, what gets recorded, and when a human is asked. Two agents built on the same model can behave very differently, because the harness differs.</p>
+  </div>
+  <p>This is not a small point. Public coding benchmarks routinely show the same model scoring very differently under different scaffolds. The SWE-agent paper made this its central claim: changing the interface the model uses to see and edit files changed results substantially, with the model held fixed. When an agent is bad, the cause is often the harness, and the harness is the part you can change today.</p>
+
+  <h2 id="terms" data-short="Four overlapping words">Harness, framework, scaffold, SDK</h2>
+  <p>These four words get used loosely, and sometimes interchangeably. Pin them down now, because Chapter 21 (the framework landscape) depends on it. Think of them as layers, not rival products.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Term</th><th>What it is</th><th>Does it run a loop?</th><th>Typical example</th></tr></thead>
+      <tbody>
+        <tr><td><strong>SDK</strong></td><td>A typed client library for one API. It handles HTTP, auth, retries, streaming and response types.</td><td>Usually not. Some ship an optional helper that loops over tool calls for you.</td><td>A provider's Python or TypeScript client</td></tr>
+        <tr><td><strong>Framework</strong></td><td>Reusable abstractions for <em>building</em> agents: loop or graph primitives, tool decorators, memory classes, integrations. You write code inside its shapes.</td><td>It gives you the parts to build one.</td><td>LangGraph, AutoGen, CrewAI</td></tr>
+        <tr><td><strong>Scaffold</strong></td><td>The research word for the code wrapped around a model so it can act on a task: prompt, tools, loop. Often tuned for one benchmark.</td><td>Yes</td><td>The SWE-agent scaffold; the “scaffolding” named in eval reports</td></tr>
+        <tr><td><strong>Harness</strong></td><td>The complete running program that drives a model: loop, tools, context, permissions, budgets, tracing, the human interface. It may be built on a framework and an SDK, or on neither.</td><td>Yes, and it owns it</td><td>Claude Code; your swarm harness</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>A useful test: <em>can it run an agent end to end with no extra code from you?</em> An SDK can't. A framework can't until you assemble it. A harness can. A scaffold can, but usually only for the task it was built for.</p>
+  <div class="box pitfall">
+    <span class="box-label">Pitfall · names lie</span>
+    <p>Product names don't follow these definitions. Anthropic describes its Claude Agent SDK as giving developers the same agent harness that powers Claude Code, so it's a harness packaged as a library, despite the “SDK” in its name. Some “frameworks” ship a default loop that is close to a harness. Classify by what the thing <em>does</em>, using the test above, not by what it's called.</p>
+  </div>
+  <p>Your project builds a harness without a framework, and Stage 9 compares it with frameworks afterwards. That order is deliberate: once you've built each component yourself, you can see which ones a framework hides from you.</p>
+
+  <h2 id="components" data-short="The nine components">The nine components</h2>
+  <p>Here is a single-agent harness taken apart. Not every harness draws these boundaries in the same place, and small harnesses merge several into one function. But every working harness does all nine jobs somewhere. If you can't point to where your harness does one of them, it isn't being done.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 440" role="img" aria-label="Component diagram of a single-agent harness. Outside the harness: the user, the model API and the environment. Inside: the loop driver at the centre, the model client above it, the budget meter below it. On the left: human-in-the-loop, context manager, state store. On the right: tool registry, permissions and sandbox, tool executor, in that order from bottom to top. A tracer bar spans the bottom.">
+        <defs>
+          <marker id="f0801-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0801-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <!-- outside world -->
+        <rect class="n-sunken" x="40" y="14" width="180" height="44" rx="6"/>
+        <text class="t-b" x="130" y="33" text-anchor="middle">user / caller</text>
+        <text class="t-sm t-muted" x="130" y="49" text-anchor="middle">task in · answer out</text>
+        <rect class="n-sunken" x="300" y="14" width="160" height="44" rx="6"/>
+        <text class="t-b" x="380" y="33" text-anchor="middle">model API</text>
+        <text class="t-sm t-muted" x="380" y="49" text-anchor="middle">remote · stateless</text>
+        <rect class="n-sunken" x="540" y="14" width="180" height="44" rx="6"/>
+        <text class="t-b" x="630" y="33" text-anchor="middle">environment</text>
+        <text class="t-sm t-muted" x="630" y="49" text-anchor="middle">files · shell · web · APIs</text>
+
+        <!-- harness boundary -->
+        <rect class="n-group" x="20" y="76" width="720" height="350" rx="10"/>
+        <text class="t-sm t-muted" x="726" y="419" text-anchor="end">harness · everything except the model</text>
+
+        <!-- left column -->
+        <rect class="n-violet" x="40" y="108" width="180" height="52" rx="6"/>
+        <text class="t-b" x="130" y="130" text-anchor="middle">human-in-the-loop</text>
+        <text class="t-sm t-muted" x="130" y="148" text-anchor="middle">task · approve · answer</text>
+        <rect x="40" y="200" width="180" height="52" rx="6"/>
+        <text class="t-b" x="130" y="222" text-anchor="middle">context manager</text>
+        <text class="t-sm t-muted" x="130" y="240" text-anchor="middle">what the model sees</text>
+        <rect x="40" y="284" width="180" height="52" rx="6"/>
+        <text class="t-b" x="130" y="306" text-anchor="middle">state store</text>
+        <text class="t-sm t-muted" x="130" y="324" text-anchor="middle">messages · status · results</text>
+
+        <!-- centre column -->
+        <rect x="300" y="108" width="160" height="52" rx="6"/>
+        <text class="t-b" x="380" y="130" text-anchor="middle">model client</text>
+        <text class="t-sm t-muted" x="380" y="148" text-anchor="middle">send · retry · parse</text>
+        <rect class="n-accent n-thick" x="290" y="190" width="180" height="72" rx="8"/>
+        <text class="t-b t-lg" x="380" y="214" text-anchor="middle">loop driver</text>
+        <text class="t-sm" x="380" y="233" text-anchor="middle">call → act → repeat</text>
+        <text class="t-sm t-muted" x="380" y="250" text-anchor="middle">owns the stop condition</text>
+        <rect class="n-amber" x="300" y="284" width="160" height="52" rx="6"/>
+        <text class="t-b" x="380" y="306" text-anchor="middle">budget meter</text>
+        <text class="t-sm t-muted" x="380" y="324" text-anchor="middle">tokens · steps · time</text>
+
+        <!-- right column -->
+        <rect x="540" y="108" width="180" height="52" rx="6"/>
+        <text class="t-b" x="630" y="130" text-anchor="middle">tool executor</text>
+        <text class="t-sm t-muted" x="630" y="148" text-anchor="middle">run · time out · catch</text>
+        <rect class="n-amber" x="540" y="200" width="180" height="52" rx="6"/>
+        <text class="t-b" x="630" y="222" text-anchor="middle">permissions + sandbox</text>
+        <text class="t-sm t-muted" x="630" y="240" text-anchor="middle">allow · ask · deny</text>
+        <rect x="540" y="284" width="180" height="52" rx="6"/>
+        <text class="t-b" x="630" y="306" text-anchor="middle">tool registry</text>
+        <text class="t-sm t-muted" x="630" y="324" text-anchor="middle">names · schemas · handlers</text>
+
+        <!-- tracer bar -->
+        <rect class="n-violet" x="40" y="356" width="680" height="40" rx="6"/>
+        <text class="t-b" x="60" y="381">tracer</text>
+        <text class="t-sm" x="120" y="381">every component emits events: run_id · agent_id · parent_id · event · ts</text>
+
+        <!-- outside links -->
+        <line x1="130" y1="58" x2="130" y2="106" marker-start="url(#f0801-ah)" marker-end="url(#f0801-ah)"/>
+        <text class="t-xs t-muted" x="137" y="88">talks to</text>
+        <line class="e-accent" x1="380" y1="60" x2="380" y2="106" marker-start="url(#f0801-aha)" marker-end="url(#f0801-aha)"/>
+        <text class="t-xs t-accent" x="387" y="88">HTTPS</text>
+        <line x1="630" y1="106" x2="630" y2="60" marker-end="url(#f0801-ah)"/>
+        <text class="t-xs t-muted" x="637" y="88">acts on</text>
+
+        <!-- left spokes -->
+        <path d="M220,134 H255 V204 H288" marker-end="url(#f0801-ah)"/>
+        <text class="t-xs t-muted" x="226" y="127">task</text>
+        <line x1="220" y1="226" x2="288" y2="226" marker-start="url(#f0801-ah)" marker-end="url(#f0801-ah)"/>
+        <text class="t-xs t-muted" x="254" y="220" text-anchor="middle">build</text>
+        <path d="M220,310 H255 V250 H288" marker-start="url(#f0801-ah)" marker-end="url(#f0801-ah)"/>
+        <text class="t-xs t-muted" x="226" y="304">save</text>
+
+        <!-- centre spokes -->
+        <line x1="380" y1="188" x2="380" y2="162" marker-end="url(#f0801-ah)"/>
+        <text class="t-xs t-muted" x="387" y="180">call</text>
+        <line x1="380" y1="264" x2="380" y2="282" marker-start="url(#f0801-ah)" marker-end="url(#f0801-ah)"/>
+        <text class="t-xs t-muted" x="387" y="277">check</text>
+
+        <!-- right chain: loop → registry → permissions → executor → environment, result back -->
+        <path class="e-accent" d="M470,250 H505 V310 H538" marker-end="url(#f0801-aha)"/>
+        <text class="t-xs t-accent" x="522" y="304" text-anchor="middle">lookup</text>
+        <line class="e-accent" x1="630" y1="284" x2="630" y2="254" marker-end="url(#f0801-aha)"/>
+        <text class="t-xs t-accent" x="637" y="274">valid</text>
+        <line class="e-accent" x1="630" y1="200" x2="630" y2="162" marker-end="url(#f0801-aha)"/>
+        <text class="t-xs t-accent" x="637" y="185">allowed</text>
+        <path d="M540,134 H505 V204 H472" marker-end="url(#f0801-ah)"/>
+        <text class="t-xs t-muted" x="522" y="127" text-anchor="middle">result</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 8.1</b>A single-agent harness. The loop driver sits in the middle and calls everything else. Look at the right column: a tool request never goes straight to the executor. It is looked up, validated and permitted first (the accent path). Only the executor touches the environment, and only the model client talks to the model. Permissions can also route an “ask” to the human-in-the-loop component.</figcaption>
+  </figure>
+
+  <p>Each component has one job. The useful question for each is: <em>what goes wrong if it's missing?</em></p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Component</th><th>Its one job</th><th>Without it</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Loop driver</strong></td><td>Run call → act → repeat, and decide when to stop</td><td>No agent: one model call, then nothing</td></tr>
+        <tr><td><strong>Model client</strong></td><td>Turn a request into an API call; retry transient errors; parse the reply into your own types</td><td>Provider details leak into every file; a 429 crashes the run</td></tr>
+        <tr><td><strong>Context manager</strong></td><td>Decide what goes into each request: system prompt, history, tool results, notes</td><td>Context grows until it overflows or rots (Chapter 06)</td></tr>
+        <tr><td><strong>State store</strong></td><td>Hold the run's facts: messages, status, partial results, step count</td><td>Nothing to resume from; no way to ask “where is this run?”</td></tr>
+        <tr><td><strong>Tool registry</strong></td><td>Map each tool name to its schema and handler</td><td>The model can name a tool that doesn't exist and your code calls <em>something</em></td></tr>
+        <tr><td><strong>Tool executor</strong></td><td>Run the handler with a timeout; turn exceptions into error results</td><td>One hung or crashing tool takes the whole agent down</td></tr>
+        <tr><td><strong>Permissions + sandbox</strong></td><td>Allow, ask or deny each call; confine what an allowed call can reach</td><td>The model's text has root access to your machine</td></tr>
+        <tr><td><strong>Budget meter</strong></td><td>Count tokens, steps, time; refuse work past the limit</td><td>A loop that never ends, or a bill that never ends</td></tr>
+        <tr><td><strong>Tracer</strong></td><td>Record every decision and action as structured events</td><td>When it goes wrong, you can't say why (Chapter 13)</td></tr>
+        <tr><td><strong>Human-in-the-loop</strong></td><td>Take the task, ask for approval, ask clarifying questions, accept a stop</td><td>The only control a person has is to kill the process</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>That's ten rows. The loop driver is the hub the other nine attach to, which is why the scope calls them nine components plus the loop. Count however you like, but don't drop one.</p>
+
+  <p>Here is where each one sits in code. This is a teaching sketch of a <em>single</em> agent, in plain Python with a generic client. It is not your swarm harness: your Stage 1 runner has different jobs, and you design it.</p>
+  <p class="code-label">The loop driver, with every component it calls</p>
+<pre><code><span class="k">def</span> run(task, h):                                  <span class="c"># h holds the components</span>
+    state = h.state.new_run(task)                    <span class="c"># state store</span>
+    h.tracer.emit(<span class="s">"run_started"</span>, run_id=state.run_id)
+    <span class="k">while True</span>:
+        <span class="k">if not</span> h.budget.allows_another_call(state):     <span class="c"># budget meter, BEFORE spending</span>
+            <span class="k">return</span> h.finish(state, <span class="s">"budget_exceeded"</span>)
+        request = h.context.build(state)              <span class="c"># context manager</span>
+        reply = h.llm.complete(**request)             <span class="c"># model client</span>
+        h.budget.charge(state, reply.usage)
+        h.tracer.emit(<span class="s">"model_call"</span>, usage=reply.usage, stop=reply.stop_reason)
+        state.append(reply.message)
+
+        <span class="k">if</span> reply.stop_reason == <span class="s">"end_turn"</span>:
+            <span class="k">return</span> h.finish(state, <span class="s">"succeeded"</span>, answer=reply.text)
+        <span class="k">if</span> reply.stop_reason != <span class="s">"tool_use"</span>:            <span class="c"># max_tokens, refusal, ...</span>
+            <span class="k">return</span> h.finish(state, <span class="s">"failed"</span>, reason=reply.stop_reason)
+
+        results = [h.dispose(call, state) <span class="k">for</span> call <span class="k">in</span> reply.tool_calls]
+        state.append(h.context.tool_results_message(results))   <span class="c"># all results, one message</span></code></pre>
+  <p>Notice what the loop doesn't do. It never runs a tool itself. Every tool call goes through <code>dispose</code>, which you'll meet in the section on proposals. That single choke point is what makes the harness safe to reason about.</p>
+
+  <h2 id="lifecycle" data-short="One request, end to end">One request through every component</h2>
+  <p>A component diagram shows what exists. A sequence diagram shows what happens, in order. Below is one small task, “fix the failing test”, as it moves through the harness. Read it top to bottom. Each horizontal arrow is one function call or message. The vertical dashed lines are the components, called <em>lifelines</em>.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 600" role="img" aria-label="Sequence diagram of one request. Lifelines from left: user, loop driver, context, model, permissions, executor, budget and tracer. The loop checks the budget, builds a request, calls the model, gets a tool_use for run_tests, charges tokens, checks permission, runs the tool, appends the result, calls the model again, gets a tool_use for edit_file, asks the user for approval, and after the same pattern repeats gets end_turn and returns the answer.">
+        <defs>
+          <marker id="f0802-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0802-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0802-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-amber" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0802-ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <!-- lifeline headers -->
+        <rect class="n-violet" x="12" y="14" width="94" height="34" rx="5"/><text class="t-sm t-b" x="59" y="35" text-anchor="middle">user</text>
+        <rect class="n-accent" x="119" y="14" width="94" height="34" rx="5"/><text class="t-sm t-b" x="166" y="35" text-anchor="middle">loop driver</text>
+        <rect x="226" y="14" width="94" height="34" rx="5"/><text class="t-sm t-b" x="273" y="35" text-anchor="middle">context</text>
+        <rect class="n-sunken" x="333" y="14" width="94" height="34" rx="5"/><text class="t-sm t-b" x="380" y="35" text-anchor="middle">model</text>
+        <rect class="n-amber" x="440" y="14" width="94" height="34" rx="5"/><text class="t-sm t-b" x="487" y="35" text-anchor="middle">permissions</text>
+        <rect x="547" y="14" width="94" height="34" rx="5"/><text class="t-sm t-b" x="594" y="35" text-anchor="middle">executor</text>
+        <rect class="n-amber" x="654" y="14" width="94" height="34" rx="5"/><text class="t-sm t-b" x="701" y="35" text-anchor="middle">budget/tracer</text>
+        <!-- lifelines -->
+        <line class="e-muted e-dash" x1="59" y1="48" x2="59" y2="592"/>
+        <line class="e-muted e-dash" x1="166" y1="48" x2="166" y2="592"/>
+        <line class="e-muted e-dash" x1="273" y1="48" x2="273" y2="592"/>
+        <line class="e-muted e-dash" x1="380" y1="48" x2="380" y2="592"/>
+        <line class="e-muted e-dash" x1="487" y1="48" x2="487" y2="592"/>
+        <line class="e-muted e-dash" x1="594" y1="48" x2="594" y2="592"/>
+        <line class="e-muted e-dash" x1="701" y1="48" x2="701" y2="592"/>
+
+        <!-- 1 intake -->
+        <line x1="59" y1="76" x2="164" y2="76" marker-end="url(#f0802-ah)"/><text class="t-xs" x="112" y="71" text-anchor="middle">task: fix test</text>
+        <line x1="166" y1="102" x2="699" y2="102" marker-end="url(#f0802-ah)"/><text class="t-xs" x="433" y="97" text-anchor="middle">check · run_started</text>
+        <!-- 2 think -->
+        <line x1="166" y1="128" x2="271" y2="128" marker-end="url(#f0802-ah)"/><text class="t-xs" x="219" y="123" text-anchor="middle">build request</text>
+        <line x1="273" y1="154" x2="378" y2="154" marker-end="url(#f0802-ah)"/><text class="t-xs" x="326" y="149" text-anchor="middle">messages + tools</text>
+        <line class="e-accent" x1="380" y1="180" x2="168" y2="180" marker-end="url(#f0802-aha)"/><text class="t-xs t-accent" x="326" y="175" text-anchor="middle">tool_use: run_tests</text>
+        <line x1="166" y1="206" x2="699" y2="206" marker-end="url(#f0802-ah)"/><text class="t-xs" x="433" y="201" text-anchor="middle">+2.1K tokens</text>
+        <!-- 3 act -->
+        <line x1="166" y1="232" x2="485" y2="232" marker-end="url(#f0802-ah)"/><text class="t-xs" x="326" y="227" text-anchor="middle">check run_tests</text>
+        <line class="e-dash" x1="487" y1="258" x2="168" y2="258" marker-end="url(#f0802-ah)"/><text class="t-xs" x="326" y="253" text-anchor="middle">allow (rule)</text>
+        <line x1="166" y1="284" x2="592" y2="284" marker-end="url(#f0802-ah)"/><text class="t-xs" x="433" y="279" text-anchor="middle">run · timeout 60s</text>
+        <line class="e-dash" x1="594" y1="310" x2="168" y2="310" marker-end="url(#f0802-ah)"/><text class="t-xs" x="433" y="305" text-anchor="middle">1 test failed</text>
+        <!-- 4 observe and think again -->
+        <line x1="166" y1="336" x2="271" y2="336" marker-end="url(#f0802-ah)"/><text class="t-xs" x="219" y="331" text-anchor="middle">append result</text>
+        <line x1="273" y1="362" x2="378" y2="362" marker-end="url(#f0802-ah)"/><text class="t-xs" x="326" y="357" text-anchor="middle">messages + result</text>
+        <line class="e-accent" x1="380" y1="388" x2="168" y2="388" marker-end="url(#f0802-aha)"/><text class="t-xs t-accent" x="326" y="383" text-anchor="middle">tool_use: edit_file</text>
+        <line x1="166" y1="414" x2="485" y2="414" marker-end="url(#f0802-ah)"/><text class="t-xs" x="326" y="409" text-anchor="middle">check edit_file</text>
+        <!-- 5 human -->
+        <line class="e-amber" x1="487" y1="440" x2="61" y2="440" marker-end="url(#f0802-ahm)"/><text class="t-xs t-amber" x="326" y="435" text-anchor="middle">ask: edit app.py?</text>
+        <line class="e-amber" x1="59" y1="466" x2="485" y2="466" marker-end="url(#f0802-ahm)"/><text class="t-xs t-amber" x="112" y="461" text-anchor="middle">approve</text>
+        <!-- elided -->
+        <rect class="n-sunken" x="20" y="478" width="720" height="26" rx="4"/>
+        <text class="t-xs t-muted" x="380" y="495" text-anchor="middle">… edit runs, tests re-run, results appended: the same pattern as above …</text>
+        <!-- 6 finish -->
+        <line class="e-accent" x1="380" y1="530" x2="168" y2="530" marker-end="url(#f0802-aha)"/><text class="t-xs t-accent" x="326" y="525" text-anchor="middle">end_turn: tests pass</text>
+        <line x1="166" y1="556" x2="699" y2="556" marker-end="url(#f0802-ah)"/><text class="t-xs" x="433" y="551" text-anchor="middle">run_finished</text>
+        <line x1="166" y1="582" x2="61" y2="582" marker-end="url(#f0802-ah)"/><text class="t-xs" x="112" y="577" text-anchor="middle">answer + diff</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 8.2</b>One request, top to bottom. Accent arrows are the model's replies; everything else is harness code. Count them: on screen the model replies three times, while the harness makes over a dozen calls between its own components. The budget check happens <em>before</em> the model call, and the permission check happens <em>before</em> the executor. The order of those checks is a design decision, not an accident.</figcaption>
+  </figure>
+
+  <p>Read the diagram as six phases. Each phase belongs to particular components.</p>
+  <ol>
+    <li><strong>Intake.</strong> The human-in-the-loop component receives the task. The loop driver creates the run in the state store and the tracer records <code>run_started</code>.</li>
+    <li><strong>Think.</strong> The budget meter says yes or no to one more call. The context manager builds the request. The model client sends it and parses the reply.</li>
+    <li><strong>Charge.</strong> The budget meter adds the reported usage. Note that this is after the fact: you only learn the real cost of a call once it returns. Chapter 10 shows why that gap matters when calls run concurrently.</li>
+    <li><strong>Act.</strong> For each <code>tool_use</code>, the registry, permissions and executor dispose of it, in that order.</li>
+    <li><strong>Observe.</strong> The results go back into the state as one <code>tool_result</code> message, and the loop goes round again.</li>
+    <li><strong>Finish.</strong> <code>end_turn</code>, or a limit, ends the loop. The tracer records the outcome and totals, and the answer goes back to the caller.</li>
+  </ol>
+
+  <p>The same run, as a trace. The numbers are illustrative. Look at who wrote each line.</p>
+  <div class="trace">
+    <div class="trace-title">Run 7f3a · fix the failing test · simplified</div>
+    <div class="tr tr-user"><span class="tr-role">user</span><span class="tr-body">Fix the failing test in tests/test_cart.py</span></div>
+    <div class="tr tr-think"><span class="tr-role">model</span><span class="tr-body">Run the tests first to see the actual failure.</span></div>
+    <div class="tr tr-act"><span class="tr-role">tool_use</span><span class="tr-body">run_tests {"path": "tests/test_cart.py"}</span></div>
+    <div class="tr tr-obs"><span class="tr-role">harness</span><span class="tr-body">registry: known · schema: ok · permission: allow (read-only rule) · executor: 3.4 s, exit 1</span></div>
+    <div class="tr tr-obs"><span class="tr-role">tool_result</span><span class="tr-body">FAILED test_total: expected 30, got 27</span></div>
+    <div class="tr tr-think"><span class="tr-role">model</span><span class="tr-body">The discount is applied twice. Fix line 41 of src/cart.py.</span></div>
+    <div class="tr tr-act"><span class="tr-role">tool_use</span><span class="tr-body">edit_file {"path": "src/cart.py", "old": "total -= disc\n    total -= disc", "new": "total -= disc"}</span></div>
+    <div class="tr tr-sys"><span class="tr-role">harness</span><span class="tr-body">permission: ask → user approved · staleness: file unchanged since last read · applied</span></div>
+    <div class="tr tr-obs"><span class="tr-role">tool_result</span><span class="tr-body">Edited src/cart.py (1 line removed)</span></div>
+    <div class="tr tr-act"><span class="tr-role">tool_use</span><span class="tr-body">run_tests {"path": "tests/test_cart.py"}</span></div>
+    <div class="tr tr-obs"><span class="tr-role">tool_result</span><span class="tr-body">12 passed</span></div>
+    <div class="tr tr-final"><span class="tr-role">answer</span><span class="tr-body">Fixed: the discount was subtracted twice in total(). All 12 tests pass.</span></div>
+    <div class="tr tr-obs"><span class="tr-role">harness</span><span class="tr-body">run_finished · status succeeded · 4 model calls · 2 tools · 1 approval</span></div>
+  </div>
+  <p>The lines marked <em>harness</em> never reach the model. The model sees the task, its own outputs and the tool results. The harness sees all of that plus every decision it made. That asymmetry is the whole job: the model needs a clean, focused context, and you need a complete record. Your JSONL trace from Stage 1 is the “harness” lines, written down.</p>
+
+  <h2 id="disposes" data-short="Model proposes, harness disposes">The model proposes, the harness disposes</h2>
+  <p>An old proverb says “man proposes, God disposes”: you make plans, but something else decides what actually happens. In an agent, the harness plays the second part. A <code>tool_use</code> block is a <em>proposal</em>. It has no authority of its own. It's text the model wrote, and it becomes an action only if harness code agrees.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 280" role="img" aria-label="The disposal pipeline. A proposal from the model passes through four harness checks in order: known tool, valid input, allowed by permissions, affordable within budget. Each check can reject, producing an error tool_result. If all pass, the call executes in a sandbox and produces a normal tool_result. Both kinds of result go back to the model as the next observation.">
+        <defs>
+          <marker id="f0803-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0803-ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-red" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0803-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-sm t-accent t-b" x="70" y="22" text-anchor="middle">the model proposes</text>
+        <text class="t-sm t-b" x="448" y="22" text-anchor="middle">the harness disposes</text>
+        <line class="e-muted" x1="146" y1="30" x2="750" y2="30"/>
+        <text class="t-xs t-amber" x="448" y="50" text-anchor="middle">ask → a human decides</text>
+
+        <rect class="n-accent" x="20" y="60" width="100" height="52" rx="6"/>
+        <text class="t-b" x="70" y="82" text-anchor="middle">proposal</text>
+        <text class="t-xs t-mono" x="70" y="99" text-anchor="middle">tool_use</text>
+        <rect x="146" y="60" width="100" height="52" rx="6"/>
+        <text class="t-b" x="196" y="82" text-anchor="middle">known?</text>
+        <text class="t-xs t-muted" x="196" y="99" text-anchor="middle">registry</text>
+        <rect x="272" y="60" width="100" height="52" rx="6"/>
+        <text class="t-b" x="322" y="82" text-anchor="middle">valid?</text>
+        <text class="t-xs t-muted" x="322" y="99" text-anchor="middle">schema + sense</text>
+        <rect class="n-amber" x="398" y="60" width="100" height="52" rx="6"/>
+        <text class="t-b" x="448" y="82" text-anchor="middle">allowed?</text>
+        <text class="t-xs t-muted" x="448" y="99" text-anchor="middle">permissions</text>
+        <rect class="n-amber" x="524" y="60" width="100" height="52" rx="6"/>
+        <text class="t-b" x="574" y="82" text-anchor="middle">affordable?</text>
+        <text class="t-xs t-muted" x="574" y="99" text-anchor="middle">budget</text>
+        <rect class="n-accent n-thick" x="650" y="60" width="100" height="52" rx="6"/>
+        <text class="t-b" x="700" y="82" text-anchor="middle">execute</text>
+        <text class="t-xs t-muted" x="700" y="99" text-anchor="middle">sandboxed</text>
+
+        <line x1="120" y1="86" x2="144" y2="86" marker-end="url(#f0803-ah)"/>
+        <line x1="246" y1="86" x2="270" y2="86" marker-end="url(#f0803-ah)"/><text class="t-xs t-muted" x="258" y="80" text-anchor="middle">yes</text>
+        <line x1="372" y1="86" x2="396" y2="86" marker-end="url(#f0803-ah)"/><text class="t-xs t-muted" x="384" y="80" text-anchor="middle">yes</text>
+        <line x1="498" y1="86" x2="522" y2="86" marker-end="url(#f0803-ah)"/><text class="t-xs t-muted" x="510" y="80" text-anchor="middle">yes</text>
+        <line x1="624" y1="86" x2="648" y2="86" marker-end="url(#f0803-ah)"/><text class="t-xs t-muted" x="636" y="80" text-anchor="middle">yes</text>
+
+        <line class="e-red" x1="196" y1="112" x2="196" y2="168" marker-end="url(#f0803-ahr)"/><text class="t-xs t-red" x="202" y="145">no</text>
+        <line class="e-red" x1="322" y1="112" x2="322" y2="168" marker-end="url(#f0803-ahr)"/><text class="t-xs t-red" x="328" y="145">no</text>
+        <line class="e-red" x1="448" y1="112" x2="448" y2="168" marker-end="url(#f0803-ahr)"/><text class="t-xs t-red" x="454" y="145">deny</text>
+        <line class="e-red" x1="574" y1="112" x2="574" y2="168" marker-end="url(#f0803-ahr)"/><text class="t-xs t-red" x="580" y="145">no</text>
+        <line class="e-accent" x1="700" y1="112" x2="700" y2="168" marker-end="url(#f0803-aha)"/>
+
+        <rect class="n-red" x="146" y="170" width="478" height="36" rx="6"/>
+        <text class="t-mono" x="385" y="192" text-anchor="middle">tool_result { is_error: true, content: reason }</text>
+        <rect class="n-accent" x="650" y="170" width="100" height="36" rx="6"/>
+        <text class="t-mono" x="700" y="192" text-anchor="middle">tool_result</text>
+
+        <line x1="385" y1="206" x2="385" y2="240"/>
+        <path d="M700,206 V240 H70 V114" marker-end="url(#f0803-ah)"/>
+        <text class="t-xs t-muted" x="78" y="150">next call</text>
+        <text class="t-sm t-muted" x="385" y="262" text-anchor="middle">Either way the result goes back to the model as an observation. Failures are data.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 8.3</b>Disposal. Four checks stand between the model's text and the world, cheapest first. A rejection is not a crash: it becomes an error <code>tool_result</code> with the same <code>tool_use_id</code>, so the model can read the reason and try something else.</figcaption>
+  </figure>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>Authority lives in harness code, never in model output.</strong> The model can ask for anything. What it gets is decided by the registry, the validator, the permission policy and the budget, all of which you wrote, tested and can read. This is your spec's principle 2.2, “LLM proposes, framework validates and executes”, seen from the inside.</p>
+  </div>
+
+  <p>Here is the choke point from the loop above, written out. Every branch returns a <code>tool_result</code> paired to the call's id, because the API requires an answer for every <code>tool_use</code> (Chapter 04).</p>
+  <p class="code-label">dispose: one tool call, four checks, one result</p>
+<pre><code><span class="k">def</span> dispose(call, state):
+    tool = registry.get(call.name)
+    <span class="k">if</span> tool <span class="k">is None</span>:
+        <span class="k">return</span> error(call, <span class="s">f"unknown tool: {call.name}"</span>)
+    problems = tool.validate(call.input)                  <span class="c"># schema first, then semantics</span>
+    <span class="k">if</span> problems:
+        <span class="k">return</span> error(call, <span class="s">"; "</span>.join(problems))
+    decision = permissions.decide(tool, call.input, state)   <span class="c"># "allow" | "ask" | "deny"</span>
+    <span class="k">if</span> decision == <span class="s">"ask"</span>:
+        decision = human.approve(call)                    <span class="c"># blocks until a person answers</span>
+    <span class="k">if</span> decision == <span class="s">"deny"</span>:
+        <span class="k">return</span> error(call, <span class="s">"denied by policy"</span>)
+    <span class="k">if not</span> budget.allows_tool(state, tool):
+        <span class="k">return</span> error(call, <span class="s">"budget exhausted"</span>)
+    <span class="k">try</span>:
+        output = executor.run(tool, call.input, timeout=tool.timeout_s)
+    <span class="k">except</span> TimeoutError:
+        <span class="k">return</span> error(call, <span class="s">f"timed out after {tool.timeout_s}s"</span>)
+    <span class="k">except</span> Exception <span class="k">as</span> exc:                          <span class="c"># the tool failed, not the harness</span>
+        <span class="k">return</span> error(call, <span class="s">f"{type(exc).__name__}: {exc}"</span>)
+    <span class="k">return</span> ok(call, output)
+
+<span class="k">def</span> error(call, reason):
+    tracer.emit(<span class="s">"tool_rejected"</span>, tool=call.name, reason=reason)
+    <span class="k">return</span> {<span class="s">"type"</span>: <span class="s">"tool_result"</span>, <span class="s">"tool_use_id"</span>: call.id,
+            <span class="s">"content"</span>: reason, <span class="s">"is_error"</span>: <span class="k">True</span>}</code></pre>
+
+  <p>Three things in this sketch are choices, and you should be able to defend each one:</p>
+  <ul>
+    <li><strong>Order.</strong> Cheap, certain checks go first. There's no point asking a person to approve a call whose input fails the schema. Now a harder one for you: should the budget check come <em>before</em> the human is asked? If the run can't afford the call, why interrupt anyone?</li>
+    <li><strong>What the model is told.</strong> “denied by policy” tells the model to try another way. A detailed reason helps it recover, but it also teaches a misbehaving model exactly where the fence is. Chapter 12 returns to this trade-off.</li>
+    <li><strong>What counts as the tool's fault.</strong> A tool that raises is an observation the model can react to. A bug in <code>dispose</code> itself is not; it should crash loudly in tests. Keep those two kinds of failure apart.</li>
+  </ul>
+
+  <div class="box pitfall">
+    <span class="box-label">Pitfall · checks in the prompt</span>
+    <p>“Never delete files” in the system prompt is a <em>request</em> to the model, not a control. It lowers the odds, and that's all. If an action must never happen, the check has to be in <code>dispose</code>, where a test can prove it. Use the prompt to guide behavior, and use code to enforce rules.</p>
+  </div>
+
+  <h2 id="tool-shape" data-short="Tool shape and control">The shape of a tool decides what the harness can check</h2>
+  <p>The harness can only reason about what a tool call makes visible. That makes tool design a control question as well as a usability question. Compare the two extremes.</p>
+  <p>A single <code>bash(command)</code> tool gives the model enormous breadth. Anything the shell can do, it can do. But every action now has the same shape, an opaque string. To tell <code>ls</code> from <code>rm -rf</code>, the harness has to parse shell syntax, which is easy to get wrong. A dedicated tool like <code>edit_file(path, old, new)</code> can do far less, but it hands the harness typed fields to act on.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>The harness wants to…</th><th>With <code>bash(command)</code></th><th>With a dedicated tool</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Gate</strong> one kind of action</td><td>Parse a shell string and hope</td><td>Match the tool name and typed arguments</td></tr>
+        <tr><td><strong>Check staleness</strong></td><td>Not possible in general</td><td>Reject an edit if the file changed since the model last read it</td></tr>
+        <tr><td><strong>Render</strong> for a human</td><td>Show a raw command</td><td>Show a diff, or a question with options</td></tr>
+        <tr><td><strong>Audit</strong></td><td>Log a string</td><td>Log structured fields: which path, which action</td></tr>
+        <tr><td><strong>Run in parallel</strong></td><td>Must assume it writes, so run calls one at a time</td><td>Read-only tools can safely run at the same time</td></tr>
+        <tr><td><strong>Cover new tasks</strong></td><td>Anything the shell can do</td><td>Only what you built</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>A practical rule of thumb: start with broad tools, and <strong>promote an action to its own tool when you need to gate, render, audit or parallelize it</strong>. Which actions need gating? Reversibility is a good boundary. Reading a file can be undone by doing nothing. Sending an email, deleting data, paying, or writing to an external system can't, so those deserve their own tools with their own permission rules.</p>
+  <p>Even asking the user a question can be a tool. Claude Code exposes question-asking as a tool. When the model calls it, the harness renders the question with its options and the loop waits until the person answers. A tool is the model's only way to ask the harness for <em>anything</em>, and that includes a human.</p>
+  <div class="box note">
+    <span class="box-label">Connect</span>
+    <p>In Stage 5, spawning becomes a tool. That's this section's argument applied to your project. If the model asks for children in free prose, your harness has to parse prose to check depth, count and fan-out. If it calls a dedicated tool with typed fields, the checks become a few comparisons. What fields would that tool need for your Stage 2 limits to be checkable <em>before</em> anything is created?</p>
+  </div>
+
+  <h2 id="claude-code" data-short="Worked example: Claude Code">Worked example: Claude Code</h2>
+  <p>Claude Code is Anthropic's coding agent. It runs in a terminal, and also in IDEs, a desktop app and the web. The model behind it is the same Claude you can call through the API. Everything that makes it a <em>coding agent</em> is harness. So it's a good specimen: a production harness you can use every day and inspect from the outside.</p>
+  <p>A caution before the details. Products change quickly. What follows describes the general design as documented at the time of writing. Treat specific names and modes as examples, and check the current Claude Code documentation before relying on them.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Component</th><th>How Claude Code does it</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Loop driver</strong></td><td>The model works through tool calls until it ends its turn. You can interrupt at any point and redirect it.</td></tr>
+        <tr><td><strong>Tool registry</strong></td><td>Built-in tools to read, search, edit and write files, run shell commands, fetch web pages, keep a to-do list and delegate to subagents. Tools from MCP servers are added to the same registry.</td></tr>
+        <tr><td><strong>Permissions + sandbox</strong></td><td>Permission modes, plus allow, ask and deny rules in settings files. Rules match tool names and, for some tools, patterns such as a command prefix or a file path.</td></tr>
+        <tr><td><strong>Context manager</strong></td><td>Loads project instructions from <code>CLAUDE.md</code> files at the start of a session. Reads files on demand rather than preloading the repository. Compacts the conversation when it nears the context limit.</td></tr>
+        <tr><td><strong>State store</strong></td><td>Saves session transcripts locally, so a session can be resumed later.</td></tr>
+        <tr><td><strong>Budget meter</strong></td><td>Shows context and token usage. Programmatic use through the Agent SDK can cap the number of turns.</td></tr>
+        <tr><td><strong>Tracer</strong></td><td>The transcript itself, plus hooks that can log every tool call, plus optional telemetry export.</td></tr>
+        <tr><td><strong>Human-in-the-loop</strong></td><td>Approval prompts, interruption, a question tool that blocks the loop until you answer, and a plan mode for review before any change.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Permission modes</h3>
+  <p>A permission mode is a standing answer to “should I ask before doing this?”. Described generally, Claude Code offers a spectrum:</p>
+  <ul>
+    <li><strong>Default:</strong> reading is allowed. It asks before actions that change things, such as editing files or running shell commands, and you can approve one action or a kind of action for the session.</li>
+    <li><strong>Accept edits:</strong> file edits go ahead without asking. Other risky actions still ask.</li>
+    <li><strong>Plan:</strong> the agent may read and explore but not change anything. It ends by presenting a plan for you to approve.</li>
+    <li><strong>Bypass:</strong> skips the prompts entirely. It's intended for isolated environments such as a throwaway container, where the sandbox is the safety boundary instead of a person.</li>
+  </ul>
+  <p>Rules in settings files refine any mode. A deny rule beats an allow rule, so you can allow a broad class of commands and still forbid one dangerous member of it. This is <code>permissions.decide</code> from the sketch above, made configurable by the user.</p>
+
+  <h3>Hooks</h3>
+  <p>Hooks are commands <em>you</em> configure, which the harness runs at fixed points in its lifecycle. The harness passes the event's details (for a tool call, the tool name and its input) to your command, and your command's result can change what happens next. A hook that runs before a tool call can block it, and its message goes back to the model. A hook that runs after an edit can run a formatter or the tests.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 300" role="img" aria-label="Hook points in one Claude Code turn. The prompt goes to the model through a UserPromptSubmit hook. A tool request passes a PreToolUse hook, then the permission check, then the tool runs. The result returns to the model through a PostToolUse hook. When the model ends its turn, a Stop hook runs. Other hook points: SessionStart, SubagentStop, PreCompact, Notification, SessionEnd.">
+        <defs>
+          <marker id="f0804-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0804-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <!-- end of turn -->
+        <rect class="n-accent" x="646" y="20" width="96" height="44" rx="6"/>
+        <text class="t-b" x="694" y="38" text-anchor="middle">turn ends</text>
+        <text class="t-xs t-muted" x="694" y="55" text-anchor="middle">answer shown</text>
+        <path class="e-accent" d="M274,108 V42 H644" marker-end="url(#f0804-aha)"/>
+        <text class="t-xs t-accent" x="330" y="36" text-anchor="middle">end_turn</text>
+        <rect class="n-violet" x="440" y="31" width="60" height="22" rx="11"/>
+        <text class="t-xs" x="470" y="46" text-anchor="middle">Stop</text>
+
+        <!-- main row -->
+        <rect class="n-sunken" x="16" y="110" width="96" height="46" rx="6"/>
+        <text class="t-b" x="64" y="129" text-anchor="middle">prompt</text>
+        <text class="t-xs t-muted" x="64" y="146" text-anchor="middle">you type</text>
+        <rect x="226" y="110" width="96" height="46" rx="6"/>
+        <text class="t-b" x="274" y="129" text-anchor="middle">model</text>
+        <text class="t-xs t-muted" x="274" y="146" text-anchor="middle">proposes</text>
+        <rect class="n-amber" x="436" y="110" width="96" height="46" rx="6"/>
+        <text class="t-b" x="484" y="129" text-anchor="middle">permissions</text>
+        <text class="t-xs t-muted" x="484" y="146" text-anchor="middle">allow/ask/deny</text>
+        <rect x="646" y="110" width="96" height="46" rx="6"/>
+        <text class="t-b" x="694" y="129" text-anchor="middle">tool runs</text>
+        <text class="t-xs t-muted" x="694" y="146" text-anchor="middle">executor</text>
+
+        <line x1="112" y1="133" x2="224" y2="133" marker-end="url(#f0804-ah)"/>
+        <line x1="322" y1="133" x2="434" y2="133" marker-end="url(#f0804-ah)"/>
+        <line x1="532" y1="133" x2="644" y2="133" marker-end="url(#f0804-ah)"/>
+        <text class="t-xs t-muted" x="589" y="127" text-anchor="middle">allowed</text>
+        <rect class="n-violet" x="121" y="122" width="96" height="22" rx="11"/>
+        <text class="t-xs" x="169" y="137" text-anchor="middle">UserPromptSubmit</text>
+        <rect class="n-violet" x="339" y="122" width="80" height="22" rx="11"/>
+        <text class="t-xs" x="379" y="137" text-anchor="middle">PreToolUse</text>
+
+        <!-- return path -->
+        <path d="M694,156 V206 H274 V158" marker-end="url(#f0804-ah)"/>
+        <rect class="n-violet" x="436" y="195" width="96" height="22" rx="11"/>
+        <text class="t-xs" x="484" y="210" text-anchor="middle">PostToolUse</text>
+        <text class="t-xs t-muted" x="340" y="226" text-anchor="middle">tool_result → next model call</text>
+
+        <!-- other hook points -->
+        <line class="e-muted" x1="16" y1="246" x2="742" y2="246"/>
+        <text class="t-sm t-muted" x="16" y="277">other points</text>
+        <rect class="n-violet" x="130" y="262" width="84" height="22" rx="11"/><text class="t-xs" x="172" y="277" text-anchor="middle">SessionStart</text>
+        <rect class="n-violet" x="222" y="262" width="84" height="22" rx="11"/><text class="t-xs" x="264" y="277" text-anchor="middle">SubagentStop</text>
+        <rect class="n-violet" x="314" y="262" width="76" height="22" rx="11"/><text class="t-xs" x="352" y="277" text-anchor="middle">PreCompact</text>
+        <rect class="n-violet" x="398" y="262" width="84" height="22" rx="11"/><text class="t-xs" x="440" y="277" text-anchor="middle">Notification</text>
+        <rect class="n-violet" x="490" y="262" width="76" height="22" rx="11"/><text class="t-xs" x="528" y="277" text-anchor="middle">SessionEnd</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 8.4</b>Where hooks run in one turn. Each violet bead is a point where the harness pauses to run a command you configured. The pre-tool hook sits <em>before</em> the permission check, so it can block a call outright. Event names are as documented at the time of writing.</figcaption>
+  </figure>
+
+  <p>Hooks matter for this chapter because they show where the line is. The model decides <em>what</em> to try. Hooks are deterministic code that runs every time, no matter what the model said, which makes them the right place for rules that must always hold. “Always run the linter after an edit” written in <code>CLAUDE.md</code> is a request. The same rule as a post-tool hook is a guarantee. One more consequence: hooks run with your own permissions on your machine, so a hook is code you must trust as much as any script you run.</p>
+
+  <h3>Subagents</h3>
+  <p>The main agent can hand a task to a <strong>subagent</strong> through a tool. Each subagent runs in its own fresh context window, with its own instructions and optionally a narrower tool set. When it finishes, only its final report comes back to the main agent. All the files it read and the dead ends it explored stay in its own context and are thrown away.</p>
+  <p>That's context isolation (Chapter 06), and it's the simplest form of spawning (Chapter 16). Note one design choice: as documented at the time of writing, Claude Code's subagents can't spawn subagents of their own, so the tree is one level deep. That's a deliberate limit, and a cheap way to make runaway recursion impossible. Your harness makes the opposite choice in Stage 2, which is exactly why you need depth, count and fan-out limits.</p>
+
+  <h3>Compaction</h3>
+  <p>A long session eventually nears the context limit. Claude Code then <strong>compacts</strong>: it has the model summarize the conversation so far, and continues with the summary in place of the full history. You can also trigger it yourself. Compaction trades detail for room, so anything the summary drops is gone from the model's view, though it can still be in the transcript. Chapter 06 covers how to choose what survives.</p>
+
+  <h2 id="swarm" data-short="Harness of harnesses">A swarm harness is a harness of harnesses</h2>
+  <p>Now scale up. In a swarm, every agent still needs all nine jobs done. It has its own loop, its own context, its own tools and its own state. So each agent runs inside its own harness. What's new is a layer above them: the services that must be <em>shared</em>, because they describe the run as a whole rather than any one agent.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 420" role="img" aria-label="A swarm harness. Across the top are four shared services: spawn policy, budget ledger, scheduler and tracer. Below them is the root agent harness, which calls the shared services. The root spawns three child agent harnesses, each with its own loop and context, which return Results. One child may spawn depth-2 grandchildren if the limits allow.">
+        <defs>
+          <marker id="f0805-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0805-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-group" x="16" y="16" width="728" height="388" rx="10"/>
+        <text class="t-b" x="32" y="40">swarm harness</text>
+        <text class="t-sm t-muted" x="140" y="40">one run · shared services · many agent harnesses</text>
+
+        <!-- shared services -->
+        <rect class="n-amber" x="36" y="56" width="164" height="48" rx="6"/>
+        <text class="t-b" x="118" y="76" text-anchor="middle">spawn policy</text>
+        <text class="t-sm t-muted" x="118" y="94" text-anchor="middle">depth · count · fan-out</text>
+        <rect class="n-amber" x="212" y="56" width="164" height="48" rx="6"/>
+        <text class="t-b" x="294" y="76" text-anchor="middle">budget ledger</text>
+        <text class="t-sm t-muted" x="294" y="94" text-anchor="middle">one shared pool</text>
+        <rect x="388" y="56" width="164" height="48" rx="6"/>
+        <text class="t-b" x="470" y="76" text-anchor="middle">scheduler</text>
+        <text class="t-sm t-muted" x="470" y="94" text-anchor="middle">concurrency limit</text>
+        <rect class="n-violet" x="564" y="56" width="164" height="48" rx="6"/>
+        <text class="t-b" x="646" y="76" text-anchor="middle">tracer</text>
+        <text class="t-sm t-muted" x="646" y="94" text-anchor="middle">one run_id · agent tree</text>
+
+        <!-- root to services -->
+        <line class="e-dash e-muted" x1="310" y1="146" x2="118" y2="106"/>
+        <line class="e-dash e-muted" x1="350" y1="146" x2="294" y2="106"/>
+        <line class="e-dash e-muted" x1="410" y1="146" x2="470" y2="106"/>
+        <line class="e-dash e-muted" x1="450" y1="146" x2="646" y2="106"/>
+
+        <!-- root -->
+        <rect class="n-accent n-thick" x="270" y="146" width="220" height="70" rx="8"/>
+        <text class="t-b" x="380" y="168" text-anchor="middle">root agent harness</text>
+        <text class="t-sm" x="380" y="187" text-anchor="middle">loop · context · tools · state</text>
+        <text class="t-sm t-accent" x="380" y="205" text-anchor="middle">has a spawn_agent tool</text>
+
+        <!-- spawn edges -->
+        <line class="e-accent" x1="320" y1="216" x2="150" y2="288" marker-start="url(#f0805-aha)" marker-end="url(#f0805-aha)"/>
+        <line class="e-accent" x1="380" y1="216" x2="380" y2="288" marker-start="url(#f0805-aha)" marker-end="url(#f0805-aha)"/>
+        <line class="e-accent" x1="440" y1="216" x2="610" y2="288" marker-start="url(#f0805-aha)" marker-end="url(#f0805-aha)"/>
+        <text class="t-xs t-accent" x="388" y="250">spawn ↓  Result ↑</text>
+        <text class="t-xs t-accent" x="222" y="244" text-anchor="end">spawn</text>
+        <text class="t-xs t-accent" x="538" y="244">spawn</text>
+
+        <!-- children -->
+        <rect x="40" y="290" width="200" height="60" rx="6"/>
+        <text class="t-b" x="140" y="311" text-anchor="middle">child harness A</text>
+        <text class="t-sm" x="140" y="328" text-anchor="middle">own loop · own context</text>
+        <text class="t-xs t-muted" x="140" y="343" text-anchor="middle">narrower tools</text>
+        <rect x="280" y="290" width="200" height="60" rx="6"/>
+        <text class="t-b" x="380" y="311" text-anchor="middle">child harness B</text>
+        <text class="t-sm" x="380" y="328" text-anchor="middle">own loop · own context</text>
+        <text class="t-xs t-muted" x="380" y="343" text-anchor="middle">may spawn, within limits</text>
+        <rect x="520" y="290" width="200" height="60" rx="6"/>
+        <text class="t-b" x="620" y="311" text-anchor="middle">child harness C</text>
+        <text class="t-sm" x="620" y="328" text-anchor="middle">own loop · own context</text>
+        <text class="t-xs t-muted" x="620" y="343" text-anchor="middle">narrower tools</text>
+
+        <!-- grandchildren -->
+        <line class="e-dash" x1="350" y1="350" x2="335" y2="368"/>
+        <line class="e-dash" x1="410" y1="350" x2="425" y2="368"/>
+        <rect class="n-ghost" x="300" y="370" width="70" height="24" rx="4"/><text class="t-xs t-muted" x="335" y="386" text-anchor="middle">depth 2</text>
+        <rect class="n-ghost" x="390" y="370" width="70" height="24" rx="4"/><text class="t-xs t-muted" x="425" y="386" text-anchor="middle">depth 2</text>
+        <text class="t-xs t-muted" x="480" y="388">shared-service lines drawn for the root only</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 8.5</b>A harness of harnesses. Every agent, root or child, runs in an ordinary agent harness like Figure 8.1. The swarm harness adds the four shared services on top. Children call them too: their spending goes to the same ledger, their events to the same trace, their spawn requests to the same policy.</figcaption>
+  </figure>
+
+  <p>The table below sorts what stays per-agent from what the swarm layer must add. The right-hand column is a list of design problems, not answers. Most of Part 4 is about them.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Concern</th><th>Single-agent harness</th><th>What the swarm layer adds</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Loop</strong></td><td>One loop</td><td>One loop per agent, plus a scheduler that runs many at once (Chapter 10)</td></tr>
+        <tr><td><strong>Budget</strong></td><td>One meter</td><td>One ledger across the tree. How it is split between parent and children is a decision for you to make (Chapter 16).</td></tr>
+        <tr><td><strong>Tracing</strong></td><td>One run</td><td>One <code>run_id</code>, an <code>agent_id</code> per agent and a <code>parent_id</code> link, so the trace forms a tree</td></tr>
+        <tr><td><strong>Permissions</strong></td><td>Per tool call</td><td>A spawn policy too: who may create agents, how deep, how many</td></tr>
+        <tr><td><strong>Lifecycle</strong></td><td>Start, finish</td><td>Every agent has its own lifecycle. Parents wait on children, and cancelling one agent must reach its whole subtree (Chapters 09 and 10).</td></tr>
+        <tr><td><strong>Failure</strong></td><td>The run fails</td><td>A child's failure becomes a Result its parent reads (your spec's principle 2.8)</td></tr>
+        <tr><td><strong>Human</strong></td><td>One person, one agent</td><td>Which agents are allowed to ask the human anything?</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>Spawning is a tool call, so it goes through disposal.</strong> <code>spawn_agent</code> sits in the parent's tool registry. When the parent proposes it, the request passes the same four checks as any other call: known, valid, allowed (the spawn policy), affordable (the ledger). Only then does the swarm layer create, register and schedule a new agent harness. The recursion is in the structure: the code that builds the child's harness is the same code that built the parent's.</p>
+  </div>
+
+  <div class="box pitfall">
+    <span class="box-label">Misconceptions to drop</span>
+    <ul>
+      <li>“The agent ran the tool.” It proposed a call. The harness decided, then ran it.</li>
+      <li>“A framework is a harness.” A framework is a box of parts. A harness is the assembled, running thing.</li>
+      <li>“Safety rules belong in the prompt.” The prompt guides. Only code enforces.</li>
+      <li>“One bash tool is enough.” It's enough for breadth. It costs you the ability to gate, render, audit and parallelize.</li>
+      <li>“A multi-agent system is several agents.” It's several agents plus the shared services that make them one system.</li>
+    </ul>
+  </div>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Stage 1.</strong> Draw Figure 8.1 for your own Stage 1 code: root plus three dummy children, no LLM. Which of the nine boxes exist already? Which don't need to exist yet? For each missing one, where will it plug in later without a rewrite?</li>
+      <li><strong>Stage 1.</strong> If one class does three of these jobs, is that acceptable now? Name the stage at which it stops being acceptable, and the symptom that will tell you.</li>
+      <li><strong>Stage 4.</strong> Your fake LLM should replace the model client and nothing else. If swapping it in means editing the loop driver, the boundary is in the wrong place. Where is yours?</li>
+      <li><strong>Stage 5.</strong> Map your Stage 2 limits onto Figure 8.3. Which limit is a “valid?” check, which is “allowed?”, and which is “affordable?” Are there any that don't fit any of the four?</li>
+      <li><strong>Stage 3 and 6.</strong> In Figure 8.2 the budget is charged <em>after</em> the call returns. When several children run at once, what can happen between one child's check and its charge? Write your prediction before you read Chapter 10.</li>
+      <li><strong>Round 2 Q1.</strong> Use the component list to argue your answer. Does a summarizer need a loop driver? Does a classify-then-route function? Which components does each one actually have?</li>
+    </ul>
+  </div>
+
+  <h2 id="check">Check yourself</h2>
+  <p>Answer each one out loud or on paper before you open it.</p>
+  <div class="quiz">
+    <details>
+      <summary><span class="tag recall">Recall</span> Distinguish SDK, framework and harness in one sentence each, and give the test that separates them.</summary>
+      <div><p>An SDK is a typed client for one API. A framework is a set of reusable parts for building agents. A harness is the complete program that drives a model end to end. The test: can it run an agent end to end with no extra code from you? The SDK can't, the framework can't until assembled, and the harness can.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag recall">Recall</span> Name the components around the loop driver, with one job each.</summary>
+      <div><p>Model client: send, retry, parse. Context manager: decide what the model sees. State store: hold the run's facts. Tool registry: map names to schemas and handlers. Tool executor: run with a timeout and catch failures. Permissions and sandbox: allow, ask or deny, and confine. Budget meter: count and refuse. Tracer: record every decision. Human-in-the-loop: task, approvals, answers, stop.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> The model proposes <code>send_email</code> with the required <code>to</code> field missing. Walk it through Figure 8.3. What does the model see next?</summary>
+      <div><p>Known: yes. Valid: no, because the schema check fails. The pipeline stops there. Nobody is asked for approval, no budget is checked, and nothing is sent. The harness returns a <code>tool_result</code> with the same <code>tool_use_id</code>, <code>is_error: true</code> and a reason such as “missing required field 'to'”. On its next call the model reads that and can retry with the field filled in.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> Your agent has only <code>bash(command)</code>. Security asks you to block all network access except one internal host. Do you parse commands, or do something else?</summary>
+      <div><p>Parsing is fragile. There are endless ways to reach the network from a shell (<code>curl</code>, <code>wget</code>, a one-line Python script, and so on), and you'll miss one. Enforce egress at a layer the command can't talk its way around: a sandbox or network policy that applies whatever the command is. Use parsing or dedicated tools for convenience and auditing, not as the security boundary.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> Where should “never exceed the run budget” be enforced: the prompt, the loop driver, <code>dispose</code>, or the model client?</summary>
+      <div><p>Not the prompt; that's a request. Check before every model call, so in the loop driver or a wrapper around the model client. Also check in <code>dispose</code> before any tool that spends, and spawning is one of them. Then notice the gap: usage is only known after a call returns, so a check-then-charge design can overshoot. Reserving budget before the call is one fix. Chapters 10 and 16 develop it.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> Claude Code's subagents can't spawn subagents. Give one benefit and one cost of that rule, and say what your harness must add because it allows recursion.</summary>
+      <div><p>Benefit: a runaway tree is impossible, and accounting and cancellation stay simple. Cost: deep tasks can't be split recursively, so the main agent has to do all the decomposition itself. Allowing recursion means you must add depth, count and fan-out limits, a ledger shared across the tree, cancellation of a whole subtree, and tracing that links each agent to its parent.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “What's the difference between an agent and a harness, and why does it matter?”</summary>
+      <div><p>Agent = model + harness. The harness is everything except the weights: the loop, tools, context, permissions, budgets, tracing and the human interface. It matters because reliability, safety, cost and observability all come from it. The same model can perform very differently in different harnesses, as SWE-agent showed with coding tasks. And the harness is the part you can change today.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “An agent dropped a production table. Where was the bug?”</summary>
+      <div><p>Not “in the model”. The model proposed an action, and the harness let it through. Look for: a tool that was too broad (raw SQL instead of typed operations); no deny or ask rule for irreversible actions; no human approval on destructive operations; credentials with more privilege than the task needed. The fixes are all code: narrower tools, permission rules keyed on reversibility, least-privilege credentials, and a trace that shows exactly which proposal was allowed and why.</p></div>
+    </details>
+  </div>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><strong>Erik Schluntz and Barry Zhang, “Building effective agents”</strong> (Anthropic, 2024).<span class="why">The augmented LLM, the case for simple harnesses, and practical advice on designing the agent-computer interface.</span></li>
+    <li><strong>John Yang, Carlos E. Jimenez et al., “SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering”</strong> (NeurIPS, 2024).<span class="why">The clearest evidence that the harness, not only the model, decides how well an agent performs.</span></li>
+    <li><strong>Anthropic, Claude Code documentation:</strong> settings and permissions, hooks, subagents.<span class="why">The current names of permission modes and hook events. Check them; they change.</span></li>
+    <li><strong>Anthropic, “Effective context engineering for AI agents”</strong> (2025).<span class="why">The context manager's job in depth: just-in-time retrieval, compaction, subagents as context isolation.</span></li>
+    <li><strong>Anthropic, “How we built our multi-agent research system”</strong> (2025).<span class="why">A real harness of harnesses: a lead agent running parallel subagents, with the engineering lessons.</span></li>
+    <li><strong>Shunyu Yao et al., “ReAct: Synergizing Reasoning and Acting in Language Models”</strong> (ICLR, 2023).<span class="why">The reason-act-observe loop that every harness in this chapter drives.</span></li>
+  </ul>
+
+  <section class="recall-card" aria-labelledby="recall-08">
+    <h2 id="recall-08" data-short="Recall card">Recall card</h2>
+    <p class="muted small">Five lines to rehearse. If you can expand each into a minute of explanation, you know this chapter.</p>
+    <ol>
+      <li>Agent = model + harness. The harness is everything except the weights.</li>
+      <li>An SDK talks to the API, a framework gives you parts, a harness runs end to end.</li>
+      <li>Nine jobs around one loop: model client, context, state, registry, executor, permissions and sandbox, budget, tracer, human.</li>
+      <li>A <code>tool_use</code> is a proposal. Known? Valid? Allowed? Affordable? Then execute. Every rejection is a <code>tool_result</code>.</li>
+      <li>A swarm harness runs many agent harnesses and owns what they share: spawn policy, budget ledger, scheduler, tracer.</li>
+    </ol>
+  </section>
+
+  <div class="done">
+    <input type="checkbox" id="done-toggle" data-chapter="08">
+    <label for="done-toggle">I can explain this chapter without notes<small>Saved in this browser only. It updates the count on the guide's home page.</small></label>
+  </div>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="07-memory.html"><small>Previous · Chapter 07</small>Memory systems</a>
+    <a class="next" href="09-control-flow-and-state.html"><small>Next · Chapter 09</small>Control flow and state</a>
+  </nav>
+
+</main>
+<aside class="toc-rail" aria-label="On this page"><p class="toc-title">In this chapter</p><nav data-toc></nav></aside>
+</div>
+</body>
+</html>

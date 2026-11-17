@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Swarm Intelligence · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="../index.html">Loop <span>→</span> Swarm</a>
+    <div class="crumbs"><a href="../index.html">Guide</a> · Part 4 · Multi-agent · Chapter 18</div>
+    <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+  </div>
+</header>
+
+<div class="page has-toc">
+<main class="chapter">
+
+  <header class="ch-head">
+    <p class="eyebrow"><b>Part 4 · Multi-agent systems</b> · Chapter 18 · Level L4</p>
+    <h1>Swarm intelligence: from ants to LLMs</h1>
+    <p class="lede">The word “swarm” in your project's name comes from biology, where it means something precise: many simple individuals, no leader, local rules, and a useful global pattern that nobody planned. This chapter teaches the real mechanisms (flocking, pheromone trails, particle swarms), then checks honestly which of them carry over to a handful of expensive LLM agents.</p>
+    <ul class="ch-meta">
+      <li><b>45 min</b> reading</li>
+      <li>Builds on: <b>Ch 15, 17</b></li>
+      <li>Your project: <b>Stage 7–8, research</b></li>
+    </ul>
+    <ol class="where" aria-label="Where this chapter sits in the guide">
+      <li class="past"><span>Part 1</span>Foundations</li>
+      <li class="past"><span>Part 2</span>Thinking &amp; memory</li>
+      <li class="past"><span>Part 3</span>The harness</li>
+      <li class="here"><span>Part 4</span>Multi-agent</li>
+      <li><span>Part 5</span>Together</li>
+    </ol>
+  </header>
+
+  <details class="toc-mobile"><summary>In this chapter</summary><div data-toc></div></details>
+
+  <div class="box predict">
+    <span class="box-label">Predict first · 10 min</span>
+    <p>Write answers in <code>docs/LEARNING_NOTES.md</code> under “Guide ch18”. Tag each one <em>sure</em> or <em>guess</em>. Don't read on until you're done.</p>
+    <ol>
+      <li>What is the smallest set of rules each bird must follow for a whole flock to move together without a leader? Guess how many rules, then name them.</li>
+      <li>Ants can't see the whole map, and no ant knows which path is shorter. How does a colony still end up using the shortest path to food?</li>
+      <li>Name one property of an ant that an LLM agent does <em>not</em> have, and say why it matters for building an “LLM swarm”.</li>
+    </ol>
+  </div>
+
+  <h2 id="what" data-short="What a swarm is">What “swarm intelligence” actually means</h2>
+  <p>The term is usually credited to Gerardo Beni and Jing Wang (1989), who used it for groups of simple robots. Bonabeau, Dorigo and Theraulaz's book <em>Swarm Intelligence</em> (1999) made it a field. The definition has three parts, and all three matter:</p>
+  <ul>
+    <li><strong>Many simple individuals.</strong> Each follows a few rules and has no model of the whole system.</li>
+    <li><strong>Only local information.</strong> Each senses its neighbors or its immediate surroundings, not the global state.</li>
+    <li><strong>No central control.</strong> Nobody assigns tasks or holds the plan. The useful behavior <em>emerges</em> from interactions.</li>
+  </ul>
+  <p><strong>Emergence</strong> means a property of the group that no individual has and no rule mentions. No ant's rule says “find the shortest path”. No bird's rule says “form a V”. The pattern exists only at the level of the group.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 236" role="img" aria-label="Emergence from micro to macro. Left: one agent senses only local signals, applies two or three simple rules, and acts, leaving a trace; it has no global view. Middle: hundreds of such agents interact with their neighbors. Right: a global pattern emerges, such as a flock moving together or a shortest trail. A feedback arrow runs from the pattern back to the individuals: the pattern changes what each agent senses.">
+        <defs>
+          <marker id="f1801-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1801-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1801-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-amber" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-caps t-muted" x="116" y="28" text-anchor="middle">micro: one agent</text>
+        <text class="t-caps t-muted" x="360" y="28" text-anchor="middle">many interactions</text>
+        <text class="t-caps t-muted" x="604" y="28" text-anchor="middle">macro: the pattern</text>
+
+        <rect class="n-plain" x="16" y="40" width="200" height="130" rx="8"/>
+        <text class="t-b" x="116" y="62" text-anchor="middle">one agent</text>
+        <text class="t-sm" x="30" y="88">· sense neighbors, local signals</text>
+        <text class="t-sm" x="30" y="110">· apply 2–3 simple rules</text>
+        <text class="t-sm" x="30" y="132">· act; leave a trace</text>
+        <text class="t-xs t-muted" x="30" y="156">no global view, no plan</text>
+        <line x1="216" y1="105" x2="264" y2="105" marker-end="url(#f1801-ah)"/>
+        <text class="t-xs t-muted" x="240" y="97" text-anchor="middle">× hundreds</text>
+
+        <rect class="n-group" x="268" y="40" width="184" height="130" rx="8"/>
+        <line class="e-line" x1="290" y1="70" x2="318" y2="62"/>
+        <line class="e-line" x1="318" y1="62" x2="340" y2="85"/>
+        <line class="e-line" x1="305" y1="95" x2="340" y2="85"/>
+        <line class="e-line" x1="340" y1="85" x2="372" y2="104"/>
+        <line class="e-line" x1="330" y1="120" x2="372" y2="104"/>
+        <line class="e-line" x1="362" y1="70" x2="372" y2="104"/>
+        <line class="e-line" x1="372" y1="104" x2="400" y2="90"/>
+        <line class="e-line" x1="400" y1="90" x2="425" y2="75"/>
+        <line class="e-line" x1="400" y1="90" x2="430" y2="115"/>
+        <line class="e-line" x1="395" y1="130" x2="430" y2="115"/>
+        <line class="e-line" x1="330" y1="120" x2="350" y2="150"/>
+        <line class="e-line" x1="305" y1="95" x2="300" y2="140"/>
+        <line class="e-line" x1="395" y1="130" x2="418" y2="150"/>
+        <circle class="fill-fg" cx="290" cy="70" r="4"/><circle class="fill-fg" cx="318" cy="62" r="4"/><circle class="fill-fg" cx="305" cy="95" r="4"/>
+        <circle class="fill-fg" cx="340" cy="85" r="4"/><circle class="fill-fg" cx="330" cy="120" r="4"/><circle class="fill-fg" cx="362" cy="70" r="4"/>
+        <circle class="fill-fg" cx="372" cy="104" r="4"/><circle class="fill-fg" cx="400" cy="90" r="4"/><circle class="fill-fg" cx="395" cy="130" r="4"/>
+        <circle class="fill-fg" cx="425" cy="75" r="4"/><circle class="fill-fg" cx="430" cy="115" r="4"/><circle class="fill-fg" cx="350" cy="150" r="4"/>
+        <circle class="fill-fg" cx="300" cy="140" r="4"/><circle class="fill-fg" cx="418" cy="150" r="4"/>
+        <line x1="452" y1="105" x2="500" y2="105" marker-end="url(#f1801-aha)"/>
+        <text class="t-xs t-accent" x="476" y="97" text-anchor="middle">emerges</text>
+
+        <rect class="n-accent" x="504" y="40" width="200" height="130" rx="8"/>
+        <text class="t-b" x="604" y="62" text-anchor="middle">global pattern</text>
+        <line class="e-accent" x1="548" y1="100" x2="566" y2="90" marker-end="url(#f1801-aha)"/>
+        <line class="e-accent" x1="576" y1="88" x2="594" y2="78" marker-end="url(#f1801-aha)"/>
+        <line class="e-accent" x1="570" y1="114" x2="588" y2="104" marker-end="url(#f1801-aha)"/>
+        <line class="e-accent" x1="600" y1="102" x2="618" y2="92" marker-end="url(#f1801-aha)"/>
+        <line class="e-accent" x1="606" y1="80" x2="624" y2="70" marker-end="url(#f1801-aha)"/>
+        <line class="e-accent" x1="594" y1="128" x2="612" y2="118" marker-end="url(#f1801-aha)"/>
+        <line class="e-accent" x1="628" y1="114" x2="646" y2="104" marker-end="url(#f1801-aha)"/>
+        <line class="e-accent" x1="634" y1="92" x2="652" y2="82" marker-end="url(#f1801-aha)"/>
+        <text class="t-xs t-muted" x="604" y="156" text-anchor="middle">a flock turning · a shortest trail</text>
+
+        <path class="e-amber e-dash" d="M604,172 V202 H116 V176" marker-end="url(#f1801-ahm)"/>
+        <text class="t-sm t-amber" x="360" y="222" text-anchor="middle">feedback: the pattern changes what each agent senses (trail, neighbors)</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 18.1</b>Emergence. The rules live in the individual, and the pattern lives in the group. The loop at the bottom is what makes it self-organizing: the pattern (a strong trail, a dense cluster) becomes part of what each individual senses next.</figcaption>
+  </figure>
+
+  <p>Bonabeau and colleagues named four ingredients of this kind of self-organization. Use them as a checklist whenever someone calls a system a swarm:</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Ingredient</th><th>What it does</th><th>In an ant colony</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Positive feedback</strong></td><td>Amplifies good options</td><td>More ants on a trail → more pheromone → more ants</td></tr>
+        <tr><td><strong>Negative feedback</strong></td><td>Stops runaway amplification</td><td>Pheromone evaporates; a food source runs out; trails get crowded</td></tr>
+        <tr><td><strong>Randomness</strong></td><td>Keeps exploring, and can find new options</td><td>Some ants wander off-trail and occasionally find a new source</td></tr>
+        <tr><td><strong>Multiple interactions</strong></td><td>Spreads information through the group</td><td>Every ant both reads and writes the trail network</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 id="boids">Boids: three rules make a flock</h2>
+  <p>In 1987 Craig Reynolds, a computer graphics researcher, wanted realistic flocks for animation without scripting every bird. His “boids” (bird-oids) each follow three steering rules, computed only from neighbors within a small radius:</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 220" role="img" aria-label="Three panels showing the boids steering rules for one focal boid inside a neighbor radius. Separation: steer away from neighbors that are too close. Alignment: turn to match the neighbors' average heading. Cohesion: steer toward the average position of the neighbors.">
+        <defs>
+          <marker id="f1802-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1802-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-group" x="8" y="8" width="224" height="204" rx="8"/>
+        <rect class="n-group" x="248" y="8" width="224" height="204" rx="8"/>
+        <rect class="n-group" x="488" y="8" width="224" height="204" rx="8"/>
+        <text class="t-caps t-muted" x="22" y="28">1 · separation</text>
+        <text class="t-caps t-muted" x="262" y="28">2 · alignment</text>
+        <text class="t-caps t-muted" x="502" y="28">3 · cohesion</text>
+
+        <circle class="n-ghost" cx="120" cy="110" r="66"/>
+        <circle class="n-plain" cx="96" cy="96" r="5"/><line class="e-muted" x1="96" y1="96" x2="110" y2="92" marker-end="url(#f1802-ah)"/>
+        <circle class="n-plain" cx="104" cy="82" r="5"/><line class="e-muted" x1="104" y1="82" x2="118" y2="78" marker-end="url(#f1802-ah)"/>
+        <circle class="n-plain" cx="138" cy="90" r="5"/><line class="e-muted" x1="138" y1="90" x2="152" y2="86" marker-end="url(#f1802-ah)"/>
+        <circle class="n-red" cx="120" cy="110" r="6"/>
+        <line class="e-accent e-thick" x1="122" y1="116" x2="132" y2="148" marker-end="url(#f1802-aha)"/>
+        <text class="t-xs" x="120" y="192" text-anchor="middle">steer away from crowding</text>
+
+        <circle class="n-ghost" cx="360" cy="110" r="66"/>
+        <circle class="n-plain" cx="326" cy="84" r="5"/><line class="e-muted" x1="326" y1="84" x2="338" y2="72" marker-end="url(#f1802-ah)"/>
+        <circle class="n-plain" cx="392" cy="80" r="5"/><line class="e-muted" x1="392" y1="80" x2="404" y2="68" marker-end="url(#f1802-ah)"/>
+        <circle class="n-plain" cx="330" cy="142" r="5"/><line class="e-muted" x1="330" y1="142" x2="342" y2="130" marker-end="url(#f1802-ah)"/>
+        <circle class="n-plain" cx="396" cy="136" r="5"/><line class="e-muted" x1="396" y1="136" x2="408" y2="124" marker-end="url(#f1802-ah)"/>
+        <circle class="n-red" cx="360" cy="110" r="6"/>
+        <line class="e-line e-dash" x1="366" y1="110" x2="392" y2="110"/>
+        <line class="e-accent e-thick" x1="365" y1="106" x2="384" y2="88" marker-end="url(#f1802-aha)"/>
+        <text class="t-xs" x="360" y="192" text-anchor="middle">match the neighbors' heading</text>
+
+        <circle class="n-ghost" cx="600" cy="124" r="66"/>
+        <circle class="n-plain" cx="560" cy="86" r="5"/>
+        <circle class="n-plain" cx="590" cy="74" r="5"/>
+        <circle class="n-plain" cx="630" cy="88" r="5"/>
+        <circle class="n-plain" cx="616" cy="66" r="5"/>
+        <text class="t-sm t-muted" x="599" y="84" text-anchor="middle">×</text>
+        <circle class="n-red" cx="600" cy="140" r="6"/>
+        <line class="e-accent e-thick" x1="600" y1="133" x2="600" y2="96" marker-end="url(#f1802-aha)"/>
+        <text class="t-xs" x="600" y="204" text-anchor="middle">move toward the local center (×)</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 18.2</b>The three boids rules, for one focal boid (red) inside its neighbor radius (dashed circle). Grey arrows are the neighbors' headings. The thick arrow is the steering each rule adds. The real boid adds all three, weighted, every frame.</figcaption>
+  </figure>
+
+  <p class="code-label">One boid, one time step (pseudocode)</p>
+<pre><code><span class="k">def</span> step(boid, flock, r=<span class="n">50</span>, w_sep=<span class="n">1.5</span>, w_ali=<span class="n">1.0</span>, w_coh=<span class="n">1.0</span>):
+    near = [b <span class="k">for</span> b <span class="k">in</span> flock <span class="k">if</span> b <span class="k">is not</span> boid <span class="k">and</span> dist(b, boid) &lt; r]   <span class="c"># local only</span>
+    <span class="k">if not</span> near:
+        <span class="k">return</span> boid.pos + boid.vel
+    sep = sum(boid.pos - b.pos <span class="k">for</span> b <span class="k">in</span> near <span class="k">if</span> dist(b, boid) &lt; r / <span class="n">3</span>)  <span class="c"># push apart</span>
+    ali = mean(b.vel <span class="k">for</span> b <span class="k">in</span> near) - boid.vel                          <span class="c"># match heading</span>
+    coh = mean(b.pos <span class="k">for</span> b <span class="k">in</span> near) - boid.pos                          <span class="c"># pull together</span>
+    <span class="hl">boid.vel = limit(boid.vel + w_sep*sep + w_ali*ali + w_coh*coh, max_speed)</span>
+    <span class="k">return</span> boid.pos + boid.vel</code></pre>
+
+  <p>Three things to notice, because they recur in every swarm algorithm:</p>
+  <ul>
+    <li><strong>Each rule alone is useless.</strong> Cohesion alone collapses into a clump. Separation alone scatters. Alignment alone gives parallel lines that drift apart. The flock exists only in the balance, which lives in three weights.</li>
+    <li><strong>The weights are the design.</strong> Change <code>w_sep</code> from 1.5 to 0.2 and you get a different, often broken, behavior. Emergent systems are tuned, not specified, and the tuning is found by experiment.</li>
+    <li><strong>Locality is a feature.</strong> The radius <code>r</code> keeps each boid's input small and keeps the group robust: lose any one bird and the flock doesn't notice.</li>
+  </ul>
+
+  <h2 id="aco" data-short="Ants &amp; stigmergy">Ant colonies, stigmergy and ant colony optimization</h2>
+  <p>Ants coordinate without talking to each other directly. They change the environment, and the changed environment tells other ants what to do. Pierre-Paul Grassé named this <strong>stigmergy</strong> in 1959, while studying how termites build nests. Foraging ants lay a chemical trail, <strong>pheromone</strong>, as they walk. Other ants tend to follow stronger trails. The trail is a message left in a place, not sent to anyone.</p>
+  <p>Experiments by Deneubourg, Goss and colleagues around 1989–1990 connected a nest to food by two bridges of different lengths. At first ants split between the bridges at random. Ants on the short bridge got back sooner, so pheromone built up faster there, so more ants chose it. Within minutes most traffic used the short bridge. No ant compared the two lengths.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 250" role="img" aria-label="Three snapshots of a nest connected to food by a short path and a long path. Round 0: both paths have pheromone 1.0, and the probability of choosing the short path is 0.50. After round 1: short 5.5, long 3.0, probability 0.65. After round 2: short 9.2, long 3.3, probability 0.74. The short path's trail thickens while the long path's fades.">
+        <rect class="n-group" x="8" y="8" width="224" height="236" rx="8"/>
+        <rect class="n-group" x="248" y="8" width="224" height="236" rx="8"/>
+        <rect class="n-group" x="488" y="8" width="224" height="236" rx="8"/>
+        <text class="t-caps t-muted" x="22" y="28">round 0</text>
+        <text class="t-caps t-muted" x="262" y="28">after round 1</text>
+        <text class="t-caps t-muted" x="502" y="28">after round 2</text>
+
+        <path class="e-muted" d="M42,120 Q120,70 198,120"/>
+        <path class="e-muted" d="M42,120 Q120,250 198,120"/>
+        <circle class="n-plain" cx="32" cy="120" r="10"/><circle class="n-amber" cx="208" cy="120" r="10"/>
+        <text class="t-xs" x="32" y="146" text-anchor="middle">nest</text><text class="t-xs" x="208" y="146" text-anchor="middle">food</text>
+        <text class="t-xs t-muted" x="120" y="88" text-anchor="middle">short · L=1</text>
+        <text class="t-xs t-muted" x="120" y="200" text-anchor="middle">long · L=2</text>
+        <text class="t-mono" x="120" y="222" text-anchor="middle">τs=1.0  τl=1.0</text>
+        <text class="t-sm" x="120" y="238" text-anchor="middle">p(short) = 0.50</text>
+
+        <path class="e-accent" d="M282,120 Q360,70 438,120"/>
+        <path class="e-muted" d="M282,120 Q360,250 438,120"/>
+        <circle class="n-plain" cx="272" cy="120" r="10"/><circle class="n-amber" cx="448" cy="120" r="10"/>
+        <text class="t-xs" x="272" y="146" text-anchor="middle">nest</text><text class="t-xs" x="448" y="146" text-anchor="middle">food</text>
+        <text class="t-xs t-accent" x="360" y="88" text-anchor="middle">short · L=1</text>
+        <text class="t-xs t-muted" x="360" y="200" text-anchor="middle">long · L=2</text>
+        <text class="t-mono" x="360" y="222" text-anchor="middle">τs=5.5  τl=3.0</text>
+        <text class="t-sm" x="360" y="238" text-anchor="middle">p(short) = 0.65</text>
+
+        <path class="e-accent e-thick" d="M522,120 Q600,70 678,120"/>
+        <path class="e-line e-dash" d="M522,120 Q600,250 678,120"/>
+        <circle class="n-plain" cx="512" cy="120" r="10"/><circle class="n-amber" cx="688" cy="120" r="10"/>
+        <text class="t-xs" x="512" y="146" text-anchor="middle">nest</text><text class="t-xs" x="688" y="146" text-anchor="middle">food</text>
+        <text class="t-xs t-accent" x="600" y="88" text-anchor="middle">short · L=1</text>
+        <text class="t-xs t-muted" x="600" y="200" text-anchor="middle">long · L=2</text>
+        <text class="t-mono" x="600" y="222" text-anchor="middle">τs=9.2  τl=3.3</text>
+        <text class="t-sm t-accent" x="600" y="238" text-anchor="middle">p(short) = 0.74</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 18.3</b>Pheromone on two paths over two rounds, using the worked example below (10 ants, α = 1, ρ = 0.5, Q = 1). Positive feedback thickens the short trail. Evaporation is the negative feedback that lets the long trail fade instead of staying forever.</figcaption>
+  </figure>
+
+  <h3>From ants to an algorithm</h3>
+  <p>Marco Dorigo turned this into <strong>ant colony optimization</strong> (ACO) in his 1992 PhD thesis. The first version, Ant System, was published by Dorigo, Maniezzo and Colorni in 1996 and applied to the travelling salesman problem. Artificial ants build solutions step by step on a graph. Two rules drive everything.</p>
+  <p><strong>Rule 1, choosing the next edge.</strong> An ant at node <em>i</em> picks an edge to node <em>j</em> with a probability that combines the edge's pheromone τ (what the colony has learned) with a heuristic η (a local hint, such as 1/distance):</p>
+  <div class="formula">
+    p(i→j) = τ<sub>ij</sub><sup>α</sup> · η<sub>ij</sub><sup>β</sup> &nbsp;/&nbsp; Σ<sub>allowed k</sub> τ<sub>ik</sub><sup>α</sup> · η<sub>ik</sub><sup>β</sup><br>
+    <span class="muted">α = how much to trust the colony's trail · β = how much to trust the local hint</span>
+  </div>
+  <p><strong>Rule 2, updating the trails.</strong> After every ant has built a solution, all trails evaporate by a fraction ρ, and each ant adds pheromone to the edges it used, more for shorter tours:</p>
+  <div class="formula">
+    τ<sub>ij</sub> ← (1 − ρ) · τ<sub>ij</sub> + Σ<sub>ants k that used ij</sub> Q / L<sub>k</sub><br>
+    <span class="muted">ρ = evaporation rate (negative feedback) · Q / L<sub>k</sub> = deposit, larger for a shorter tour (positive feedback)</span>
+  </div>
+
+  <h3>Worked example: watch the colony decide</h3>
+  <p>Two paths from nest to food: short (L = 1) and long (L = 2). Ten ants per round. α = 1, and we ignore the heuristic (β = 0) so only pheromone matters. ρ = 0.5, Q = 1. Both trails start at τ = 1. To keep the arithmetic clean, use the <em>expected</em> number of ants on each path.</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Round</th><th>p(short)</th><th>Ants short / long</th><th>Deposit short / long</th><th>New τ<sub>short</sub></th><th>New τ<sub>long</sub></th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>1 / 2 = 0.50</td><td>5 / 5</td><td>5·1/1 = 5 &nbsp;/&nbsp; 5·1/2 = 2.5</td><td>0.5·1 + 5 = 5.5</td><td>0.5·1 + 2.5 = 3.0</td></tr>
+        <tr><td>2</td><td>5.5 / 8.5 ≈ 0.65</td><td>6.5 / 3.5</td><td>6.47 &nbsp;/&nbsp; 1.76</td><td>2.75 + 6.47 ≈ 9.22</td><td>1.5 + 1.76 ≈ 3.26</td></tr>
+        <tr><td>3</td><td>9.22 / 12.48 ≈ 0.74</td><td>7.4 / 2.6</td><td>7.39 &nbsp;/&nbsp; 1.31</td><td>4.61 + 7.39 ≈ 12.0</td><td>1.63 + 1.31 ≈ 2.94</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>After round 3, p(short) ≈ 12.0 / 14.94 ≈ 0.80. Look at the long path: its pheromone <em>fell</em> in round 3, because evaporation removed more than the few remaining ants added. That's negative feedback at work. Now consider the two extremes, because they show why ρ is the most important parameter:</p>
+  <ul>
+    <li><strong>ρ = 0 (no evaporation):</strong> every early deposit stays forever. If the first rounds happen to favor a bad path by chance, the colony can lock onto it. This is <em>premature convergence</em>, the algorithm's version of groupthink.</li>
+    <li><strong>ρ = 1 (total evaporation):</strong> the colony forgets everything after each round. There is no learning, and the ants just repeat the round-1 split.</li>
+  </ul>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p>Stigmergy is coordination through a shared, <em>decaying</em> medium. The decay matters as much as the writing. A shared store that only ever accumulates (old claims, old findings, old votes) behaves like an ant colony with ρ = 0: it reinforces whatever got there first.</p>
+  </div>
+
+  <h2 id="pso" data-short="Particle swarms">Particle swarm optimization</h2>
+  <p>James Kennedy and Russell Eberhart introduced <strong>particle swarm optimization</strong> (PSO) in 1995. It started as a simulation of social behavior and turned out to be a good optimizer for continuous problems. Each particle is a candidate solution: a point <em>x</em> in the search space with a velocity <em>v</em>. Each particle remembers the best point it has found itself (<em>pbest</em>). The swarm shares the best point anyone has found (<em>gbest</em>). On every step, each particle updates its velocity from three pulls:</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 270" role="img" aria-label="One particle's update in a two-dimensional search space with contour lines around the swarm's best point. Starting at x, three vectors are added tip to tail: inertia w times v, a pull toward the particle's own best point pbest, and a pull toward the swarm's best point gbest. The resultant new velocity moves the particle to its new position. On the right, the update equations with an explanation of each term.">
+        <defs>
+          <marker id="f1804-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1804-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-amber" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1804-ahv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-violet" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1804-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-group" x="16" y="4" width="384" height="262" rx="8"/>
+        <ellipse class="n-ghost" cx="150" cy="60" rx="30" ry="18"/>
+        <ellipse class="n-ghost" cx="150" cy="60" rx="60" ry="36"/>
+        <ellipse class="n-ghost" cx="150" cy="60" rx="90" ry="54"/>
+        <circle class="fill-violet" cx="150" cy="60" r="5"/>
+        <text class="t-xs t-violet" x="160" y="52">gbest</text>
+        <rect class="n-amber" x="135" y="145" width="10" height="10"/>
+        <text class="t-xs t-amber" x="140" y="139" text-anchor="middle">pbest</text>
+
+        <line x1="186" y1="210" x2="278" y2="210" marker-end="url(#f1804-ah)"/>
+        <text class="t-xs" x="230" y="226" text-anchor="middle">w·v</text>
+        <line class="e-amber" x1="280" y1="210" x2="266" y2="189" marker-end="url(#f1804-ahm)"/>
+        <text class="t-xs t-amber" x="280" y="196">c1·r1·(pbest − x)</text>
+        <line class="e-violet" x1="264" y1="186" x2="248" y2="100" marker-end="url(#f1804-ahv)"/>
+        <text class="t-xs t-violet" x="264" y="141">c2·r2·(gbest − x)</text>
+        <line class="e-accent e-thick" x1="183" y1="205" x2="243" y2="102" marker-end="url(#f1804-aha)"/>
+        <text class="t-xs t-accent" x="222" y="128" text-anchor="end">v (new velocity)</text>
+        <circle class="n-plain" cx="180" cy="210" r="6"/>
+        <text class="t-b" x="166" y="228" text-anchor="middle">x</text>
+        <circle class="n-accent" cx="246" cy="96" r="5"/>
+        <text class="t-xs t-accent" x="256" y="92">new x</text>
+        <text class="t-caps t-muted" x="28" y="256">search space · 2 dimensions</text>
+
+        <text class="t-b" x="420" y="34">One particle, one step</text>
+        <text class="t-mono" x="420" y="64">v ← w·v</text>
+        <text class="t-mono t-amber" x="440" y="86">+ c1·r1·(pbest − x)</text>
+        <text class="t-mono t-violet" x="440" y="108">+ c2·r2·(gbest − x)</text>
+        <text class="t-mono t-accent" x="420" y="134">x ← x + v</text>
+        <text class="t-sm" x="420" y="170">w·v: keep moving the way you were</text>
+        <text class="t-sm t-amber" x="420" y="190">pbest: the best spot I have seen</text>
+        <text class="t-sm t-violet" x="420" y="210">gbest: the best spot anyone has seen</text>
+        <text class="t-sm t-muted" x="420" y="230">r1, r2: fresh random numbers in [0, 1]</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 18.4</b>One PSO update, drawn as vector addition. Inertia carries the particle on, the amber term pulls it back toward its own memory, and the violet term pulls it toward the swarm's best. The thick arrow is their sum. Fresh random weights on every step keep particles from moving in lockstep.</figcaption>
+  </figure>
+
+  <p>Read the equation term by term. Shi and Eberhart (1998) added the inertia weight <em>w</em>, and typical settings put <em>w</em> around 0.7 and <em>c1</em>, <em>c2</em> around 1.5. Exact values vary by problem.</p>
+  <dl class="defs">
+    <dt>w·v (inertia)</dt><dd>Momentum. Large <em>w</em> means wide exploration. If <em>w</em> is above 1, velocities can grow without limit and the swarm flies apart.</dd>
+    <dt>c1·r1·(pbest − x) (memory)</dt><dd>The particle's own experience. With only this term, particles never share anything: you get many independent searches.</dd>
+    <dt>c2·r2·(gbest − x) (social)</dt><dd>The swarm's shared knowledge. With only this term, every particle rushes to the current best point. That converges fast, often to a local optimum, because nobody keeps looking elsewhere.</dd>
+  </dl>
+  <p>The trade-off between the last two terms is the trade-off of every collective search, including groups of people and groups of LLM agents. Too little sharing wastes effort on duplicate dead ends. Too much sharing gives <strong>premature convergence</strong>: everyone copies the early leader, and the group stops exploring. A widely used variant limits sharing on purpose. Each particle sees only the best point among a few neighbors (a <em>local best</em>) instead of the global best, which slows the spread of information and keeps diversity longer.</p>
+
+  <h2 id="properties" data-short="Strengths &amp; costs">What decentralization buys, and what it costs</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>You get…</th><th>…and you pay with</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Robustness.</strong> No single point of failure. Losing individuals barely matters.</td><td><strong>Predictability.</strong> You can't easily say in advance what the group will do, or prove that it will finish.</td></tr>
+        <tr><td><strong>Scalability.</strong> Each individual's work depends on its neighbors, not on the group size.</td><td><strong>Speed to a decision.</strong> Information spreads hop by hop. Convergence takes many rounds.</td></tr>
+        <tr><td><strong>Adaptivity.</strong> When the environment changes, trails re-form without anyone re-planning.</td><td><strong>Controllability.</strong> To change the outcome you tune weights and rates, not instructions. Tuning is found by experiment.</td></tr>
+        <tr><td><strong>Simple parts.</strong> Each individual is easy to build and test.</td><td><strong>Debuggability.</strong> No single trace explains the result. The cause is spread over thousands of interactions.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Notice where the benefits come from: very many individuals, very cheap steps, and many rounds. Hold on to that sentence. It decides almost everything in the rest of this chapter.</p>
+
+  <h2 id="llm-swarms" data-short="LLM “swarms”">What “swarm” means in LLM systems</h2>
+  <p>In LLM work, “swarm” is used loosely. Three quite different things carry the name, and it helps to keep them apart.</p>
+
+  <h3>1 · Handoff networks: OpenAI's Swarm</h3>
+  <p>In October 2024 OpenAI released <strong>Swarm</strong>, an experimental, educational framework built around two ideas it called <em>routines</em> and <em>handoffs</em>. A routine is an agent: instructions plus the functions it may call. A handoff is a function that returns <em>another agent</em>. When the model calls it, the loop swaps the active agent and keeps the conversation history. In March 2025 OpenAI replaced Swarm with the production-oriented OpenAI Agents SDK, which keeps handoffs as a core concept.</p>
+  <div class="trace">
+    <div class="trace-title">Trace · a handoff network (illustrative)</div>
+    <div class="tr tr-user"><span class="tr-role">user</span><div class="tr-body">I was charged twice for order 5521.</div></div>
+    <div class="tr tr-sys"><span class="tr-role">harness</span><div class="tr-body">active agent = triage · tools: transfer_to_billing, transfer_to_tech_support</div></div>
+    <div class="tr tr-act"><span class="tr-role">triage</span><div class="tr-body">transfer_to_billing()</div></div>
+    <div class="tr tr-sys"><span class="tr-role">harness</span><div class="tr-body">function returned Agent(billing) → active agent = billing · history kept · triage stops</div></div>
+    <div class="tr tr-act"><span class="tr-role">billing</span><div class="tr-body">lookup_charges(order_id="5521")</div></div>
+    <div class="tr tr-obs"><span class="tr-role">result</span><div class="tr-body">[{"id":"ch_1","amount":42.00}, {"id":"ch_2","amount":42.00}]</div></div>
+    <div class="tr tr-act"><span class="tr-role">billing</span><div class="tr-body">refund(charge_id="ch_2")</div></div>
+    <div class="tr tr-final"><span class="tr-role">billing</span><div class="tr-body">You were charged twice. I've refunded the second charge.</div></div>
+  </div>
+  <p>Look at what this is: a <strong>state machine</strong> whose states are agents and whose transitions are chosen by the model. It's useful, and it's the handoff pattern from Chapter 17. It has none of the four swarm ingredients. There is no feedback loop, no randomness used for exploration, and no many-to-many interaction. Only one agent is active at a time.</p>
+
+  <h3>2 · Agent societies: simulations</h3>
+  <p><strong>Generative Agents</strong> (Park et al., 2023) put 25 LLM-driven characters in a small simulated town called Smallville. Each one has a memory stream, periodically reflects on its memories, and makes plans. The famous result: the researchers gave one character the intention to host a Valentine's Day party. Over the following simulated days, invitations spread from character to character, others asked each other to the party, and several showed up at the right time and place. Nobody scripted the spread. That is genuine emergence, through many local conversations, much like Figure 18.1.</p>
+  <p><strong>CAMEL</strong> (Li et al., 2023) paired two agents in a role-play: an “AI user” that gives instructions and an “AI assistant” that carries them out, with carefully designed starting prompts (“inception prompting”) to keep them on task. The paper is honest about what goes wrong when two LLMs talk without supervision: the agents swap roles, repeat instructions back to each other, give vague replies that do nothing, or loop on the same exchange. You'll meet these again as failure modes in Chapter 19.</p>
+  <p>Both are mainly <em>research instruments</em>, for studying social behavior or generating training conversations. Neither is a design for getting a task done cheaply and reliably.</p>
+
+  <h3>3 · Debate and collective answers</h3>
+  <p>In <strong>multi-agent debate</strong> (Du et al., 2023), several model instances answer a question, read each other's answers, and revise over a few rounds. The paper reported gains on arithmetic, reasoning and factuality tasks.</p>
+  <div class="trace">
+    <div class="trace-title">Trace · three agents, two rounds of debate (illustrative)</div>
+    <div class="tr tr-user"><span class="tr-role">question</span><div class="tr-body">How many two-way channels does a 12-agent full mesh have?</div></div>
+    <div class="tr tr-act"><span class="tr-role">agent-1 r1</span><div class="tr-body">12·11/2 = 66</div></div>
+    <div class="tr tr-act"><span class="tr-role">agent-2 r1</span><div class="tr-body">Each agent talks to 11 others: 12·11 = 132</div></div>
+    <div class="tr tr-act"><span class="tr-role">agent-3 r1</span><div class="tr-body">66</div></div>
+    <div class="tr tr-think"><span class="tr-role">agent-2 r2</span><div class="tr-body">The others divided by 2. I counted A→B and B→A separately, but a two-way channel is one pair.</div></div>
+    <div class="tr tr-final"><span class="tr-role">all r2</span><div class="tr-body">66</div></div>
+  </div>
+  <p>Here debate worked, because the majority was right and the error was checkable: agent-2 could <em>see</em> the missing division. Change those two conditions and it can fail. If two of three agents share the same wrong belief, the correct minority may give in, and the debate converges confidently on the wrong answer. Later evaluations, such as Smit et al. (2024), found that debate doesn't reliably beat simpler methods like self-consistency voting at a similar cost, and that results are sensitive to settings such as the number of agents and rounds. Treat debate as one more aggregator to measure, not as a guaranteed improvement.</p>
+
+  <h2 id="transfer" data-short="What transfers">What transfers to LLM agents, and what doesn't</h2>
+  <p>Go back to the sentence from the strengths-and-costs section: swarm benefits come from very many individuals, very cheap steps, and many rounds. LLM agents fail all three. Row by row:</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Property</th><th>Ants, boids, particles</th><th>LLM agents</th><th>So…</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Scale</strong></td><td>Hundreds to millions</td><td>Usually 3 to 50</td><td>No averaging over huge numbers. Each agent's mistake matters.</td></tr>
+        <tr><td><strong>Cost per step</strong></td><td>Nearly free</td><td>A model call: seconds and real money</td><td>You can't afford wasteful random exploration.</td></tr>
+        <tr><td><strong>Rounds</strong></td><td>Thousands</td><td>A handful</td><td>No time to converge by slow reinforcement. Aggregate explicitly.</td></tr>
+        <tr><td><strong>Individual</strong></td><td>2–3 fixed rules</td><td>A general reasoner with long instructions</td><td>Behavior can't be predicted from rules, and is less stable.</td></tr>
+        <tr><td><strong>Independence</strong></td><td>Random individual variation</td><td>Copies of one model share biases</td><td>Errors are correlated (Chapter 17). Diversity must be designed in.</td></tr>
+        <tr><td><strong>Locality</strong></td><td>Sense only neighbors</td><td>Often read a large shared context</td><td>Everyone sees the same thing early, so herding comes easily.</td></tr>
+        <tr><td><strong>Stigmergy</strong></td><td>Pheromone that evaporates</td><td>A blackboard or shared store</td><td><strong>Transfers well</strong>, if entries expire and carry evidence, not just popularity.</td></tr>
+        <tr><td><strong>Robustness</strong></td><td>Any individual is replaceable</td><td>An agent may hold a unique subtask</td><td>Redundancy costs tokens. Retry or reassign instead.</td></tr>
+        <tr><td><strong>Feedback signal</strong></td><td>Objective: path length, fitness</td><td>Often another model's judgment</td><td>The signal you reinforce is itself noisy (Chapter 13).</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>The ideas that survive the trip are the <em>mechanisms</em>, not the scale: a shared medium with decay (stigmergy as a blackboard with expiry), explicit balance between exploiting the best answer and exploring alternatives (PSO's memory vs social terms), and negative feedback that stops runaway amplification (evaporation, caps, budgets). What doesn't survive is the hope that useful behavior will emerge by itself from many cheap trials.</p>
+
+  <h2 id="centralized" data-short="Spectrum of control">A spectrum, not a binary</h2>
+  <p>Real systems sit somewhere between a single planner and a leaderless swarm. Where you sit is a choice about what you're willing to give up.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 250" role="img" aria-label="A spectrum of control from centralized to decentralized. Left: orchestrator-worker, one hub planner connected to five workers. Middle: a hierarchical tree with planners at each level. Right: a peer swarm of nodes linked only to nearby neighbors, with no planner. An arrow underneath runs from predictable, debuggable and bounded in cost on the left, to robust to single failures, adaptive and hard to steer on the right. Most production LLM systems sit toward the left.">
+        <defs>
+          <marker id="f1805-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <line class="e-muted" x1="120" y1="90" x2="120" y2="40"/>
+        <line class="e-muted" x1="120" y1="90" x2="168" y2="75"/>
+        <line class="e-muted" x1="120" y1="90" x2="150" y2="132"/>
+        <line class="e-muted" x1="120" y1="90" x2="90" y2="132"/>
+        <line class="e-muted" x1="120" y1="90" x2="72" y2="75"/>
+        <circle class="n-violet" cx="120" cy="90" r="15"/>
+        <circle class="n-plain" cx="120" cy="40" r="9"/><circle class="n-plain" cx="168" cy="75" r="9"/><circle class="n-plain" cx="150" cy="132" r="9"/>
+        <circle class="n-plain" cx="90" cy="132" r="9"/><circle class="n-plain" cx="72" cy="75" r="9"/>
+
+        <line class="e-muted" x1="360" y1="50" x2="320" y2="95"/>
+        <line class="e-muted" x1="360" y1="50" x2="400" y2="95"/>
+        <line class="e-muted" x1="320" y1="95" x2="300" y2="140"/>
+        <line class="e-muted" x1="320" y1="95" x2="340" y2="140"/>
+        <line class="e-muted" x1="400" y1="95" x2="380" y2="140"/>
+        <line class="e-muted" x1="400" y1="95" x2="420" y2="140"/>
+        <circle class="n-violet" cx="360" cy="50" r="11"/>
+        <circle class="n-violet" cx="320" cy="95" r="9"/><circle class="n-violet" cx="400" cy="95" r="9"/>
+        <circle class="n-plain" cx="300" cy="140" r="8"/><circle class="n-plain" cx="340" cy="140" r="8"/>
+        <circle class="n-plain" cx="380" cy="140" r="8"/><circle class="n-plain" cx="420" cy="140" r="8"/>
+
+        <line class="e-muted" x1="560" y1="60" x2="600" y2="48"/>
+        <line class="e-muted" x1="600" y1="48" x2="640" y2="66"/>
+        <line class="e-muted" x1="560" y1="60" x2="548" y2="104"/>
+        <line class="e-muted" x1="560" y1="60" x2="596" y2="98"/>
+        <line class="e-muted" x1="600" y1="48" x2="596" y2="98"/>
+        <line class="e-muted" x1="640" y1="66" x2="650" y2="112"/>
+        <line class="e-muted" x1="596" y1="98" x2="650" y2="112"/>
+        <line class="e-muted" x1="548" y1="104" x2="580" y2="140"/>
+        <line class="e-muted" x1="596" y1="98" x2="580" y2="140"/>
+        <line class="e-muted" x1="596" y1="98" x2="628" y2="146"/>
+        <line class="e-muted" x1="650" y1="112" x2="628" y2="146"/>
+        <circle class="n-plain" cx="560" cy="60" r="8"/><circle class="n-plain" cx="600" cy="48" r="8"/><circle class="n-plain" cx="640" cy="66" r="8"/>
+        <circle class="n-plain" cx="548" cy="104" r="8"/><circle class="n-plain" cx="596" cy="98" r="8"/><circle class="n-plain" cx="650" cy="112" r="8"/>
+        <circle class="n-plain" cx="580" cy="140" r="8"/><circle class="n-plain" cx="628" cy="146" r="8"/>
+
+        <text class="t-b" x="120" y="176" text-anchor="middle">orchestrator-worker</text>
+        <text class="t-xs t-muted" x="120" y="192" text-anchor="middle">one planner, many workers</text>
+        <text class="t-b" x="360" y="176" text-anchor="middle">hierarchical tree</text>
+        <text class="t-xs t-muted" x="360" y="192" text-anchor="middle">planners at each level</text>
+        <text class="t-b" x="600" y="176" text-anchor="middle">peer swarm</text>
+        <text class="t-xs t-muted" x="600" y="192" text-anchor="middle">local rules, no planner</text>
+
+        <line class="e-muted" x1="40" y1="214" x2="680" y2="214" marker-start="url(#f1805-ah)" marker-end="url(#f1805-ah)"/>
+        <circle class="fill-amber" cx="240" cy="214" r="5"/>
+        <text class="t-xs t-amber" x="240" y="207" text-anchor="middle">most production LLM systems</text>
+        <text class="t-sm" x="40" y="236">predictable · debuggable · bounded cost</text>
+        <text class="t-sm" x="680" y="236" text-anchor="end">robust to single failures · adaptive · hard to steer</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 18.5</b>From central control to none. Violet nodes plan; white nodes do work. Your recursive tree is the middle picture. Moving right buys robustness and adaptivity, and costs predictability, debuggability and cost control: the things a harness exists to provide.</figcaption>
+  </figure>
+
+  <div class="box note">
+    <span class="box-label">An honest note on the word</span>
+    <p>Many products and repositories called “agent swarms” are orchestrator-worker systems or handoff networks with a biological name. That isn't wrong. It just isn't swarm intelligence in Bonabeau's sense. When you read about one, run the four-ingredient checklist: where is the positive feedback, the negative feedback, the randomness, the many-to-many interaction? If you can't find them, evaluate it as an orchestrator, because that's what it is. The same applies to your own project, and that's fine: a well-bounded tree is a perfectly good thing to build.</p>
+  </div>
+
+  <div class="box pitfall">
+    <span class="box-label">Misconceptions to drop</span>
+    <ul>
+      <li>“More agents means emergent intelligence.” Emergence needs many cheap interactions and feedback loops. Five expensive agents talking a few times won't produce it.</li>
+      <li>“Swarms are robust, so an LLM swarm is robust.” Robustness comes from interchangeable individuals. LLM agents usually aren't interchangeable.</li>
+      <li>“Agreement among agents is a strong signal.” In ACO without evaporation, and in debate among correlated models, agreement can just be early luck reinforced.</li>
+      <li>“OpenAI's Swarm is a swarm.” It's a handoff state machine. Useful, but a different thing.</li>
+    </ul>
+  </div>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Naming.</strong> Run the four-ingredient checklist on your own design as it stands after Stage 6. Which ingredients does it have? If the answer is “none”, is that a problem for <em>your goals</em>, or only for the name?</li>
+      <li><strong>Stage 7–8, a blackboard.</strong> If you add a shared findings or claims store, what plays the role of evaporation? Who removes stale entries, and when? What happens to a claim whose owner crashed?</li>
+      <li><strong>Evidence vs popularity.</strong> If an entry's “strength” goes up each time another agent confirms it, are you measuring evidence or herding? What would an agent have to attach to count as an independent confirmation?</li>
+      <li><strong>Exploration vs exploitation.</strong> Which part of your tree plays PSO's social term, pulling everyone toward the current best plan? Which part, if any, keeps exploring alternatives?</li>
+      <li><strong>A research angle.</strong> Your harness can run controlled experiments that the papers in this chapter couldn't afford at scale. Write down one hypothesis, for example about how diverse sub-task decompositions affect correlated errors. What would you measure, and against which baseline?</li>
+    </ul>
+  </div>
+
+  <h2 id="check">Check yourself</h2>
+  <p>Answer each one out loud or on paper before you open it.</p>
+  <div class="quiz">
+    <details>
+      <summary><span class="tag recall">Recall</span> Name the four ingredients of self-organization, with an ant-colony example of each.</summary>
+      <div><p>Positive feedback: more ants on a trail leave more pheromone, which attracts more ants. Negative feedback: pheromone evaporates, and food sources run out. Randomness: some ants wander and discover new sources. Multiple interactions: every ant reads and writes the shared trail network, so information spreads through the colony.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag recall">Recall</span> State the three boids rules. What does each boid need to sense to apply them?</summary>
+      <div><p>Separation: steer away from neighbors that are too close. Alignment: steer toward the neighbors' average heading. Cohesion: steer toward the neighbors' average position. Each boid needs only the positions and velocities of neighbors within a small radius. It never sees the whole flock.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> Continue the worked example for one more round, from τ<sub>short</sub> ≈ 12.0 and τ<sub>long</sub> ≈ 2.94. Then say what happens with ρ = 0 and with ρ = 1.</summary>
+      <div><p>p(short) = 12.0 / 14.94 ≈ 0.80, so about 8.0 ants go short and 2.0 go long. τ<sub>short</sub> = 0.5·12.0 + 8.0 ≈ 14.0. τ<sub>long</sub> = 0.5·2.94 + 2.0/2 ≈ 2.46. p(short) for the next round ≈ 14.0 / 16.5 ≈ 0.85. With ρ = 0 nothing evaporates, so early random imbalances persist and the colony can lock onto a bad path. With ρ = 1 all memory is erased each round, so the split stays at 0.50 forever and nothing is learned.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> In PSO, what happens if you set c1 = 0 and make c2 large? What if w is above 1?</summary>
+      <div><p>With c1 = 0 and a large c2, particles ignore their own memory and rush toward the current global best. The swarm converges fast, often on a local optimum, because nobody keeps exploring: premature convergence. With w above 1, velocity grows each step unless it's clamped, so particles overshoot more and more and the swarm diverges.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> Map stigmergy onto a blackboard for LLM research agents. What are the deposit, the evaporation and the trail strength? Name one risk.</summary>
+      <div><p>Deposit: an agent writes a finding or a claim, with its source and the agent's id. Evaporation: entries expire after a time to live unless renewed, and claims lapse if the owner stops heartbeating. Strength: the number of <em>independent</em> confirmations, each with its own source. Risks: herding, where agents confirm whatever is already on the board because they all read it first; injected text spreading to every reader; and an unbounded board flooding every agent's context.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “Is OpenAI's Swarm framework an example of swarm intelligence?”</summary>
+      <div><p>Not in the technical sense. Swarm is a handoff network: agents are instructions plus functions, and a function can return another agent, which becomes the active one with the history kept. It's a state machine whose transitions the model chooses. Only one agent is active at a time, and there's no positive or negative feedback loop, no randomness used for exploration, and no many-to-many interaction. The name is a metaphor. Its replacement, the Agents SDK, keeps the handoff idea.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “Would you use swarm intelligence ideas in an LLM-based research system?”</summary>
+      <div><p>Selectively. The scale and cost assumptions don't transfer: LLM agents are few, expensive and correlated, so you can't rely on emergence from many cheap trials. Three mechanisms do transfer. A shared store with decay (stigmergy) helps avoid duplicate work and stale claims. Deliberately balancing shared knowledge against independent exploration reduces groupthink. Negative feedback, such as caps, budgets and expiring entries, stops runaway amplification. I'd keep central control over spawning and budgets, and measure any decentralized piece against a single-agent baseline.</p></div>
+    </details>
+  </div>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><strong>Eric Bonabeau, Marco Dorigo and Guy Theraulaz, “Swarm Intelligence: From Natural to Artificial Systems”</strong> (Oxford University Press, 1999).<span class="why">The foundational book. The four ingredients of self-organization come from this line of work.</span></li>
+    <li><strong>Gerardo Beni and Jing Wang, “Swarm Intelligence in Cellular Robotic Systems”</strong> (NATO workshop on robots and biological systems, 1989).<span class="why">Usually credited as the origin of the term.</span></li>
+    <li><strong>Craig W. Reynolds, “Flocks, Herds, and Schools: A Distributed Behavioral Model”</strong> (SIGGRAPH, 1987).<span class="why">The boids paper. Short and readable.</span></li>
+    <li><strong>Marco Dorigo, Vittorio Maniezzo and Alberto Colorni, “Ant System: Optimization by a Colony of Cooperating Agents”</strong> (IEEE Transactions on Systems, Man, and Cybernetics, Part B, 1996).<span class="why">The first full ACO algorithm and its equations.</span></li>
+    <li><strong>Marco Dorigo and Thomas Stützle, “Ant Colony Optimization”</strong> (MIT Press, 2004).<span class="why">The textbook treatment, including the double-bridge experiments and later ACO variants.</span></li>
+    <li><strong>James Kennedy and Russell Eberhart, “Particle Swarm Optimization”</strong> (IEEE International Conference on Neural Networks, 1995).<span class="why">The original PSO paper.</span></li>
+    <li><strong>Yuhui Shi and Russell Eberhart, “A Modified Particle Swarm Optimizer”</strong> (IEEE International Conference on Evolutionary Computation, 1998).<span class="why">Adds the inertia weight <em>w</em>.</span></li>
+    <li><strong>Joon Sung Park et al., “Generative Agents: Interactive Simulacra of Human Behavior”</strong> (UIST, 2023).<span class="why">Smallville, memory streams, reflection, and the Valentine's Day party.</span></li>
+    <li><strong>Guohao Li et al., “CAMEL: Communicative Agents for ‘Mind’ Exploration of Large Language Model Society”</strong> (NeurIPS, 2023).<span class="why">Role-playing agents, and a frank list of how two LLMs talking go wrong.</span></li>
+    <li><strong>Yilun Du et al., “Improving Factuality and Reasoning in Language Models through Multiagent Debate”</strong> (2023).<span class="why">The main multi-agent debate paper.</span></li>
+    <li><strong>Andries Smit et al., “Should we be going MAD? A Look at Multi-Agent Debate Strategies for LLMs”</strong> (ICML, 2024).<span class="why">A sober benchmark comparison of debate against simpler methods.</span></li>
+    <li><strong>OpenAI, the Swarm repository and the “Orchestrating Agents: Routines and Handoffs” cookbook</strong> (2024), and the <strong>OpenAI Agents SDK documentation</strong> (2025).<span class="why">The handoff model in its original and current form.</span></li>
+  </ul>
+
+  <section class="recall-card" aria-labelledby="recall-18">
+    <h2 id="recall-18" data-short="Recall card">Recall card</h2>
+    <p class="muted small">Five lines to rehearse. If you can expand each into a minute of explanation, you know this chapter.</p>
+    <ol>
+      <li>Swarm intelligence: many simple individuals, local information, no central control, and an emergent global pattern.</li>
+      <li>Self-organization needs positive feedback, negative feedback, randomness and multiple interactions.</li>
+      <li>Boids: separation, alignment, cohesion. ACO: probabilistic choice by pheromone, then evaporation and deposit. PSO: inertia plus own-best plus swarm-best.</li>
+      <li>Decay is as important as reinforcement. Without it, the first answer wins, whether it's right or not.</li>
+      <li>LLM agents are few, expensive and correlated. Borrow the mechanisms (decaying shared state, explore vs exploit, negative feedback), not the hope of emergence.</li>
+    </ol>
+  </section>
+
+  <div class="done">
+    <input type="checkbox" id="done-toggle" data-chapter="18">
+    <label for="done-toggle">I can explain this chapter without notes<small>Saved in this browser only. It updates the count on the guide's home page.</small></label>
+  </div>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="17-communication.html"><small>Back to · Chapter 17</small>Communication and coordination</a>
+    <a class="next" href="19-multi-agent-failures.html"><small>Next · Chapter 19</small>How multi-agent systems fail</a>
+  </nav>
+</main>
+<aside class="toc-rail" aria-label="On this page"><p class="toc-title">In this chapter</p><nav data-toc></nav></aside>
+</div>
+</body>
+</html>

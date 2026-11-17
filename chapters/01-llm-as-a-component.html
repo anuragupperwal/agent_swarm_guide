@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The LLM as a Component · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="../index.html">Loop <span>→</span> Swarm</a>
+    <div class="crumbs"><a href="../index.html">Guide</a> · Part 1 · Foundations · Chapter 01</div>
+    <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+  </div>
+</header>
+
+<div class="page has-toc">
+<main class="chapter">
+
+  <header class="ch-head">
+    <p class="eyebrow"><b>Part 1 · Foundations</b> · Chapter 01 · Level L1</p>
+    <h1>The LLM as a component</h1>
+    <p class="lede">Before you can build an agent, be precise about the part you're building around. A large language model is a stateless function: it takes text in and puts text out. Everything people call memory, action or judgment in an agent is code someone wrote around that function.</p>
+    <ul class="ch-meta">
+      <li><b>40 min</b> reading</li>
+      <li>Builds on: <b>basic GenAI</b></li>
+      <li>Your project: <b>Stage 1, Stage 4</b></li>
+    </ul>
+    <ol class="where" aria-label="Where this chapter sits in the guide">
+      <li class="here"><span>Part 1</span>Foundations</li>
+      <li><span>Part 2</span>Thinking &amp; memory</li>
+      <li><span>Part 3</span>The harness</li>
+      <li><span>Part 4</span>Multi-agent</li>
+      <li><span>Part 5</span>Together</li>
+    </ol>
+  </header>
+
+  <details class="toc-mobile"><summary>In this chapter</summary><div data-toc></div></details>
+
+  <div class="box predict">
+    <span class="box-label">Predict first · 10 min</span>
+    <p>Write answers in <code>docs/LEARNING_NOTES.md</code> under “Guide ch01”. Tag each one <em>sure</em> or <em>guess</em>. Don't read on until you're done.</p>
+    <ol>
+      <li>You send “My name is Asha” in one API call. In a second call you send only “What is my name?”. What comes back, and why?</li>
+      <li>An agent runs 10 steps, and each step adds about 4,000 tokens to the conversation. Estimate the total input tokens billed across all 10 calls. Write down a number.</li>
+      <li>The model returns JSON that matches your schema exactly. Name one way it can still be wrong.</li>
+    </ol>
+  </div>
+
+  <h2 id="big-idea">The big idea</h2>
+  <p>Picture the model as a function with frozen weights. You give it a sequence of tokens. It gives back a probability for every possible next token. That's all it does. It doesn't wait, remember or act, and it can't see anything you didn't put in the input.</p>
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>The model is the reasoning engine. The agent is the program around it.</strong> The program stores the conversation, decides what the model sees, runs the actions the model asks for, and stops it when it should stop. When this guide says “harness”, it means that program. Every later chapter is about one part of it.</p>
+  </div>
+  <p>This framing matters for your project. Every time you're tempted to say “the agent decides” or “the agent remembers”, ask which line of <em>your</em> code does it. If you can't point to one, the behavior is either luck or a bug waiting to happen.</p>
+
+  <h2 id="generation">Tokens and the generation loop</h2>
+  <p>Text is split into <strong>tokens</strong>: subword pieces, roughly three-quarters of an English word on average. The exact split depends on the tokenizer. The model never sees characters, only token IDs. That's why it can be bad at spelling and character counting, and why every limit and price is set in tokens.</p>
+  <p>Generation is <strong>autoregressive</strong>. One forward pass over the context gives a probability distribution for the next token. One token is sampled from it and appended to the context, and the model runs again. The response you get is the result of hundreds or thousands of these passes.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 236" role="img" aria-label="The generation loop: context tokens go into the model, which outputs next-token probabilities. One token is sampled and appended to the context, and the loop repeats.">
+        <defs>
+          <marker id="f11-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f11-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-sm t-muted" x="20" y="30">context (input tokens)</text>
+        <rect x="20" y="42" width="44" height="30" rx="4"/><text x="42" y="62" text-anchor="middle">The</text>
+        <rect x="68" y="42" width="56" height="30" rx="4"/><text x="96" y="62" text-anchor="middle">agent</text>
+        <rect x="128" y="42" width="60" height="30" rx="4"/><text x="158" y="62" text-anchor="middle">called</text>
+        <rect x="192" y="42" width="26" height="30" rx="4"/><text x="205" y="62" text-anchor="middle">a</text>
+        <rect class="n-ghost" x="222" y="42" width="42" height="30" rx="4"/><text class="t-accent" x="243" y="62" text-anchor="middle">tool</text>
+
+        <line x1="270" y1="57" x2="304" y2="57" marker-end="url(#f11-ah)"/>
+        <rect class="n-plain" x="308" y="32" width="118" height="50" rx="6"/>
+        <text class="t-b" x="367" y="54" text-anchor="middle">model</text>
+        <text class="t-sm t-muted" x="367" y="71" text-anchor="middle">fixed weights</text>
+        <line x1="426" y1="57" x2="454" y2="57" marker-end="url(#f11-ah)"/>
+
+        <text class="t-sm t-muted" x="466" y="30">probability of each next token</text>
+        <text class="t-mono" x="466" y="52">tool</text>
+        <rect class="fill-accent" x="540" y="40" width="110" height="16" rx="2"/>
+        <text class="t-sm" x="656" y="52">0.46</text>
+        <text class="t-mono" x="466" y="74">function</text>
+        <rect class="fill-muted" x="540" y="62" width="74" height="16" rx="2"/>
+        <text class="t-sm" x="620" y="74">0.31</text>
+        <text class="t-mono" x="466" y="96">search</text>
+        <rect class="fill-muted" x="540" y="84" width="29" height="16" rx="2"/>
+        <text class="t-sm" x="575" y="96">0.12</text>
+        <text class="t-mono" x="466" y="118">other</text>
+        <rect class="fill-muted" x="540" y="106" width="26" height="16" rx="2"/>
+        <text class="t-sm" x="572" y="118">0.11</text>
+
+        <line x1="595" y1="126" x2="595" y2="146" marker-end="url(#f11-ah)"/>
+        <rect class="n-accent" x="530" y="150" width="130" height="28" rx="5"/>
+        <text class="t-mono" x="595" y="168" text-anchor="middle">sample → tool</text>
+
+        <path class="e-accent" d="M530,164 H243 V78" marker-end="url(#f11-aha)"/>
+        <text class="t-sm t-accent" x="390" y="184" text-anchor="middle">append the token, run the model again</text>
+        <text class="t-sm t-muted" x="20" y="222">This inner loop repeats until a stop token, a stop sequence, or max_tokens. One API call runs the whole loop.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 1.1</b>The generation loop. The bars are drawn to scale. The model usually picked “tool”, but on another run it could pick “function”. That one sampled token is where non-determinism starts.</figcaption>
+  </figure>
+
+  <p>Two loops are easy to confuse, and your project depends on keeping them apart:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th></th><th>Generation loop</th><th>Agent loop</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Runs where</strong></td><td>Inside the provider, during one API call</td><td>In your code, across many API calls</td></tr>
+        <tr><td><strong>One iteration</strong></td><td>One forward pass, one token</td><td>One model call, then zero or more tool runs</td></tr>
+        <tr><td><strong>Ends when</strong></td><td>Stop token, stop sequence, or max_tokens</td><td>The model stops requesting tools, or one of your limits fires</td></tr>
+        <tr><td><strong>Controlled by</strong></td><td>The provider (you set a few knobs)</td><td>You, entirely</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Chapter 03 is about the second loop. This chapter is about the box that sits inside it.</p>
+
+  <h2 id="stateless" data-short="Statelessness">Stateless: the context window is its only memory</h2>
+  <p>The model keeps nothing between calls. No session, no hidden memory, no learning from your last request. If a chat product seems to remember you, it's because the client sent your earlier messages again, or retrieved notes and put them into the input.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 330" role="img" aria-label="Three consecutive API calls. Each request carries the whole conversation so far, so the request grows each time. Your code copies each reply into the next request. The model keeps nothing between calls.">
+        <defs>
+          <marker id="f12-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f12-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-b" x="105" y="26" text-anchor="middle">Call 1</text>
+        <text class="t-b" x="360" y="26" text-anchor="middle">Call 2</text>
+        <text class="t-b" x="615" y="26" text-anchor="middle">Call 3</text>
+
+        <!-- call 1 request -->
+        <rect class="n-sunken" x="20" y="160" width="170" height="22" rx="4"/><text class="t-sm" x="30" y="175">system prompt</text>
+        <rect class="n-violet" x="20" y="186" width="170" height="22" rx="4"/><text class="t-sm" x="30" y="201">user: My name is Asha</text>
+        <!-- call 2 request -->
+        <rect class="n-sunken" x="275" y="108" width="170" height="22" rx="4"/><text class="t-sm" x="285" y="123">system prompt</text>
+        <rect class="n-violet" x="275" y="134" width="170" height="22" rx="4"/><text class="t-sm" x="285" y="149">user: My name is Asha</text>
+        <rect class="n-accent" x="275" y="160" width="170" height="22" rx="4"/><text class="t-sm" x="285" y="175">asst: Nice to meet you</text>
+        <rect class="n-violet" x="275" y="186" width="170" height="22" rx="4"/><text class="t-sm" x="285" y="201">user: What is my name?</text>
+        <!-- call 3 request -->
+        <rect class="n-sunken" x="530" y="56" width="170" height="22" rx="4"/><text class="t-sm" x="540" y="71">system prompt</text>
+        <rect class="n-violet" x="530" y="82" width="170" height="22" rx="4"/><text class="t-sm" x="540" y="97">user: My name is Asha</text>
+        <rect class="n-accent" x="530" y="108" width="170" height="22" rx="4"/><text class="t-sm" x="540" y="123">asst: Nice to meet you</text>
+        <rect class="n-violet" x="530" y="134" width="170" height="22" rx="4"/><text class="t-sm" x="540" y="149">user: What is my name?</text>
+        <rect class="n-accent" x="530" y="160" width="170" height="22" rx="4"/><text class="t-sm" x="540" y="175">asst: Your name is Asha</text>
+        <rect class="n-violet" x="530" y="186" width="170" height="22" rx="4"/><text class="t-sm" x="540" y="201">user: Spell it backwards</text>
+
+        <!-- model + replies -->
+        <line x1="105" y1="210" x2="105" y2="224" marker-end="url(#f12-ah)"/>
+        <line x1="360" y1="210" x2="360" y2="224" marker-end="url(#f12-ah)"/>
+        <line x1="615" y1="210" x2="615" y2="224" marker-end="url(#f12-ah)"/>
+        <rect class="n-plain" x="20" y="226" width="170" height="28" rx="5"/><text class="t-sm" x="105" y="244" text-anchor="middle">model · no memory</text>
+        <rect class="n-plain" x="275" y="226" width="170" height="28" rx="5"/><text class="t-sm" x="360" y="244" text-anchor="middle">model · no memory</text>
+        <rect class="n-plain" x="530" y="226" width="170" height="28" rx="5"/><text class="t-sm" x="615" y="244" text-anchor="middle">model · no memory</text>
+        <line x1="105" y1="254" x2="105" y2="268" marker-end="url(#f12-ah)"/>
+        <line x1="360" y1="254" x2="360" y2="268" marker-end="url(#f12-ah)"/>
+        <line x1="615" y1="254" x2="615" y2="268" marker-end="url(#f12-ah)"/>
+        <rect class="n-accent" x="20" y="270" width="170" height="24" rx="4"/><text class="t-sm" x="105" y="286" text-anchor="middle">Nice to meet you</text>
+        <rect class="n-accent" x="275" y="270" width="170" height="24" rx="4"/><text class="t-sm" x="360" y="286" text-anchor="middle">Your name is Asha</text>
+        <rect class="n-accent" x="530" y="270" width="170" height="24" rx="4"/><text class="t-sm" x="615" y="286" text-anchor="middle">ahsA</text>
+
+        <!-- client copies replies forward -->
+        <path class="e-muted e-dash" d="M190,282 H232 V171 H271" marker-end="url(#f12-ahm)"/>
+        <path class="e-muted e-dash" d="M445,282 H487 V171 H526" marker-end="url(#f12-ahm)"/>
+        <text class="t-xs t-muted" x="232" y="308" text-anchor="middle">your code</text>
+        <text class="t-xs t-muted" x="232" y="320" text-anchor="middle">copies it</text>
+        <text class="t-xs t-muted" x="487" y="308" text-anchor="middle">your code</text>
+        <text class="t-xs t-muted" x="487" y="320" text-anchor="middle">copies it</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 1.2</b>Statelessness. The model “knows” the name in call 3 only because the name is in the request. Delete the second block from call 3 and the model can't know it. That's your Predict question 1.</figcaption>
+  </figure>
+
+  <p>The <strong>context window</strong> is the maximum number of tokens one call can handle, input and output together. Think of it as the model's whole world for that call. Three consequences follow:</p>
+  <ol>
+    <li><strong>You own the history.</strong> The conversation is a list in your program. You can append to it, trim it, summarize it, or give two agents different lists. That editing is <em>context engineering</em> (Chapter 06).</li>
+    <li><strong>Every token you send is paid for and processed on every call.</strong> History isn't free just because it's old.</li>
+    <li><strong>Multi-agent systems start here.</strong> A sub-agent is useful largely because it gets a fresh, small context window instead of inheriting a huge one (Chapter 14).</li>
+  </ol>
+
+  <h2 id="anatomy">Anatomy of one call</h2>
+  <p>Strip away every SDK and an agent call is one HTTP request with a JSON body. The fields below follow Anthropic's Messages API, which this guide uses as its reference shape. Other providers name things differently, but the parts are the same.</p>
+
+  <p class="code-label">Request</p>
+<pre><code>{
+  <span class="s">"model"</span>: <span class="s">"claude-opus-5-5"</span>,
+  <span class="s">"max_tokens"</span>: <span class="n">16000</span>,
+  <span class="s">"system"</span>: <span class="s">"You are a research assistant. Use tools when you need facts."</span>,
+  <span class="s">"tools"</span>: [{
+    <span class="s">"name"</span>: <span class="s">"search_docs"</span>,
+    <span class="s">"description"</span>: <span class="s">"Search the internal docs. Returns the top 5 passages."</span>,
+    <span class="s">"input_schema"</span>: {
+      <span class="s">"type"</span>: <span class="s">"object"</span>,
+      <span class="s">"properties"</span>: { <span class="s">"query"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span> } },
+      <span class="s">"required"</span>: [<span class="s">"query"</span>]
+    }
+  }],
+  <span class="s">"messages"</span>: [
+    { <span class="s">"role"</span>: <span class="s">"user"</span>, <span class="s">"content"</span>: <span class="s">"What does our retry policy say about 429 errors?"</span> }
+  ]
+}</code></pre>
+
+  <p class="code-label">Response</p>
+<pre><code>{
+  <span class="s">"role"</span>: <span class="s">"assistant"</span>,
+  <span class="s">"content"</span>: [
+    { <span class="s">"type"</span>: <span class="s">"text"</span>, <span class="s">"text"</span>: <span class="s">"I'll check the docs."</span> },
+    { <span class="s">"type"</span>: <span class="s">"tool_use"</span>, <span class="s">"id"</span>: <span class="s">"toolu_01A..."</span>, <span class="s">"name"</span>: <span class="s">"search_docs"</span>,
+      <span class="s">"input"</span>: { <span class="s">"query"</span>: <span class="s">"retry policy 429"</span> } }
+  ],
+  <span class="hl"><span class="s">"stop_reason"</span>: <span class="s">"tool_use"</span></span>,
+  <span class="s">"usage"</span>: { <span class="s">"input_tokens"</span>: <span class="n">412</span>, <span class="s">"output_tokens"</span>: <span class="n">61</span> }
+}</code></pre>
+
+  <dl class="defs">
+    <dt>model</dt><dd>Which model version runs the call. Pin it. Behavior changes between versions, so an upgrade can quietly change an agent's trajectory.</dd>
+    <dt>max_tokens</dt><dd>A cap on output tokens for this call. Hit it and the response stops mid-sentence, or mid-JSON.</dd>
+    <dt>system</dt><dd>Standing instructions. There's nothing special about it: it's text placed before the conversation.</dd>
+    <dt>tools</dt><dd>What the model is allowed to <em>ask for</em>: a name, a description, and a JSON Schema for the inputs. Chapter 04 covers this in depth.</dd>
+    <dt>messages</dt><dd>The whole conversation so far, alternating user and assistant turns. Your code builds this list on every call.</dd>
+    <dt>content</dt><dd>A list of blocks, not one string. A single response can mix <code>text</code> and several <code>tool_use</code> blocks. Reasoning models can also return thinking blocks (Chapter 05).</dd>
+    <dt>stop_reason</dt><dd>Why generation stopped. Your code's next move depends on it (next section).</dd>
+    <dt>usage</dt><dd>The tokens billed for this call. Log it on every call. It's your only accurate cost meter.</dd>
+  </dl>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p>The model never ran <code>search_docs</code>. It <em>wrote a request</em> to run it and stopped. Whether that request is executed, changed, or refused is up to your code. The rule in your spec, “the model proposes, the framework disposes”, isn't a design preference you impose. It's how the API already works.</p>
+  </div>
+
+  <h2 id="stop-reason" data-short="stop_reason">stop_reason: your first control-flow decision</h2>
+  <p>Every response says why it ended. Code that reads only the text and ignores <code>stop_reason</code> breaks the first time an output gets truncated or a tool gets requested. Branching on it is the first <code>if</code> in any agent loop.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 250" role="img" aria-label="A response's stop_reason branches to five actions: end_turn returns the answer; tool_use runs tools and calls the model again; max_tokens means output was cut off; pause_turn means re-send to resume; refusal means surface it.">
+        <defs>
+          <marker id="f13-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-plain" x="16" y="100" width="124" height="50" rx="6"/>
+        <text class="t-b" x="78" y="121" text-anchor="middle">response</text>
+        <text class="t-mono t-muted" x="78" y="139" text-anchor="middle">stop_reason</text>
+
+        <path d="M140,125 C162,125 160,30 182,30" marker-end="url(#f13-ah)"/>
+        <path d="M140,125 C162,125 160,78 182,78" marker-end="url(#f13-ah)"/>
+        <path d="M140,125 C162,125 160,126 182,126" marker-end="url(#f13-ah)"/>
+        <path d="M140,125 C162,125 160,174 182,174" marker-end="url(#f13-ah)"/>
+        <path d="M140,125 C162,125 160,222 182,222" marker-end="url(#f13-ah)"/>
+
+        <rect x="184" y="16" width="124" height="28" rx="5"/><text class="t-mono" x="246" y="34" text-anchor="middle">end_turn</text>
+        <rect class="n-accent" x="184" y="64" width="124" height="28" rx="5"/><text class="t-mono" x="246" y="82" text-anchor="middle">tool_use</text>
+        <rect x="184" y="112" width="124" height="28" rx="5"/><text class="t-mono" x="246" y="130" text-anchor="middle">max_tokens</text>
+        <rect x="184" y="160" width="124" height="28" rx="5"/><text class="t-mono" x="246" y="178" text-anchor="middle">pause_turn</text>
+        <rect x="184" y="208" width="124" height="28" rx="5"/><text class="t-mono" x="246" y="226" text-anchor="middle">refusal</text>
+
+        <line x1="308" y1="30" x2="330" y2="30" marker-end="url(#f13-ah)"/>
+        <line x1="308" y1="78" x2="330" y2="78" marker-end="url(#f13-ah)"/>
+        <line x1="308" y1="126" x2="330" y2="126" marker-end="url(#f13-ah)"/>
+        <line x1="308" y1="174" x2="330" y2="174" marker-end="url(#f13-ah)"/>
+        <line x1="308" y1="222" x2="330" y2="222" marker-end="url(#f13-ah)"/>
+
+        <rect x="332" y="13" width="372" height="34" rx="5"/><text x="346" y="34">Finished. Return the answer to the caller.</text>
+        <rect class="n-accent" x="332" y="61" width="372" height="34" rx="5"/><text x="346" y="82">Run the tools, append the results, call again.</text>
+        <rect x="332" y="109" width="372" height="34" rx="5"/><text x="346" y="130">Cut off. Continue it, or fail the step.</text>
+        <rect x="332" y="157" width="372" height="34" rx="5"/><text x="346" y="178">Server tool paused the turn. Re-send to resume.</text>
+        <rect x="332" y="205" width="372" height="34" rx="5"/><text x="346" y="226">Declined. Surface it; don't blindly retry.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 1.3</b>What your code does next for each stop_reason. The highlighted branch is the agent loop: as long as the model keeps returning <code>tool_use</code>, the loop keeps going. A sixth value, <code>stop_sequence</code>, means a custom stop string you set was produced.</figcaption>
+  </figure>
+
+  <div class="box pitfall">
+    <span class="box-label">Pitfall</span>
+    <p><code>max_tokens</code> is the quiet one. A truncated plan looks like a short plan unless you check. If your planner returns three subtasks and <code>stop_reason</code> is <code>max_tokens</code>, there may have been a fourth that got cut off.</p>
+  </div>
+
+  <h2 id="structured" data-short="Structured output">Structured output is a proposal, not a fact</h2>
+  <p>Modern APIs can constrain decoding to a JSON Schema. Tokens that would break the schema are never sampled, so the output always parses and always has the right fields and types (unless it was truncated or refused). That's a real improvement. It's also where people stop checking, and that's the mistake.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 190" role="img" aria-label="Model output passes four checks before any action: syntax, schema, semantics and policy. Each check can reject. Structured outputs guarantee only the first two.">
+        <defs>
+          <marker id="f14-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f14-ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-red" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <line class="e-accent" x1="130" y1="30" x2="364" y2="30"/>
+        <text class="t-sm t-accent" x="247" y="22" text-anchor="middle">structured outputs guarantee these</text>
+        <line class="e-amber" x1="390" y1="30" x2="624" y2="30"/>
+        <text class="t-sm t-amber" x="507" y="22" text-anchor="middle">only your code can check these</text>
+
+        <rect class="n-sunken" x="8" y="40" width="96" height="52" rx="6"/>
+        <text class="t-b" x="56" y="62" text-anchor="middle">model</text><text class="t-sm t-muted" x="56" y="79" text-anchor="middle">output</text>
+        <line x1="104" y1="66" x2="128" y2="66" marker-end="url(#f14-ah)"/>
+        <rect x="130" y="40" width="104" height="52" rx="6"/>
+        <text class="t-b" x="182" y="62" text-anchor="middle">1 Syntax</text><text class="t-sm t-muted" x="182" y="79" text-anchor="middle">parses?</text>
+        <line x1="234" y1="66" x2="258" y2="66" marker-end="url(#f14-ah)"/>
+        <rect x="260" y="40" width="104" height="52" rx="6"/>
+        <text class="t-b" x="312" y="62" text-anchor="middle">2 Schema</text><text class="t-sm t-muted" x="312" y="79" text-anchor="middle">fields &amp; types?</text>
+        <line x1="364" y1="66" x2="388" y2="66" marker-end="url(#f14-ah)"/>
+        <rect x="390" y="40" width="104" height="52" rx="6"/>
+        <text class="t-b" x="442" y="62" text-anchor="middle">3 Semantics</text><text class="t-sm t-muted" x="442" y="79" text-anchor="middle">makes sense?</text>
+        <line x1="494" y1="66" x2="518" y2="66" marker-end="url(#f14-ah)"/>
+        <rect x="520" y="40" width="104" height="52" rx="6"/>
+        <text class="t-b" x="572" y="62" text-anchor="middle">4 Policy</text><text class="t-sm t-muted" x="572" y="79" text-anchor="middle">allowed?</text>
+        <line x1="624" y1="66" x2="648" y2="66" marker-end="url(#f14-ah)"/>
+        <rect class="n-accent" x="650" y="40" width="62" height="52" rx="6"/>
+        <text class="t-b" x="681" y="71" text-anchor="middle">act</text>
+
+        <line class="e-red e-dash" x1="182" y1="92" x2="182" y2="138" marker-end="url(#f14-ahr)"/>
+        <line class="e-red e-dash" x1="312" y1="92" x2="312" y2="138" marker-end="url(#f14-ahr)"/>
+        <line class="e-red e-dash" x1="442" y1="92" x2="442" y2="138" marker-end="url(#f14-ahr)"/>
+        <line class="e-red e-dash" x1="572" y1="92" x2="572" y2="138" marker-end="url(#f14-ahr)"/>
+        <text class="t-xs t-red" x="188" y="120">truncated</text>
+        <text class="t-xs t-red" x="318" y="120">missing field</text>
+        <text class="t-xs t-red" x="448" y="120">50 subtasks</text>
+        <text class="t-xs t-red" x="578" y="120">depth 9</text>
+        <rect class="n-red" x="130" y="140" width="494" height="34" rx="5"/>
+        <text x="377" y="161" text-anchor="middle">reject: send the error back to the model, retry, or fail the step</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 1.4</b>Four checks between model output and action. A plan with 50 well-formed subtasks passes checks 1 and 2 perfectly, and should still never run. This is the plan validator in Stage 4 of your project.</figcaption>
+  </figure>
+
+  <p>The schema can't express “three to six subtasks, no duplicates, none of them the parent's own task again, total depth within budget”. Those are your rules, so your code enforces them. A useful habit: write the semantic and policy checks <em>before</em> you write the prompt. They're the contract the prompt is trying to satisfy.</p>
+
+  <h2 id="cost" data-short="Latency and cost">Latency and cost, and why agents get expensive</h2>
+  <p>Two numbers dominate how a call feels and what it costs:</p>
+  <ul>
+    <li><strong>Latency.</strong> Time to first token grows with input length. After that, output streams at a roughly fixed rate, so <em>output tokens drive wall-clock time</em>. A model that thinks for 2,000 tokens before answering is slower than one that answers in 200. Running calls in parallel cuts wall-clock time, not tokens.</li>
+    <li><strong>Cost.</strong> You pay for input and output tokens, and output tokens cost several times more per token. Thinking tokens are billed as output. For exact prices, check the provider's current price list. They change, so this guide doesn't quote them.</li>
+  </ul>
+  <p>The part most people miss is how input tokens <em>accumulate</em> in an agent. Because the model is stateless, step <em>k</em> re-sends everything from steps 1 to <em>k</em>−1. Each step is a little bigger than the last, so the total grows much faster than the step count.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 300" role="img" aria-label="Bar chart of input tokens per call over a 10-step agent run. Each bar is a fixed 2K base plus 4K of history per earlier step, rising from 2K to 38K. The total across all calls is 200K tokens.">
+        <rect class="fill-violet" x="90" y="14" width="12" height="12" rx="2"/>
+        <text class="t-sm" x="108" y="24">system + tools + task: 2K, re-sent on every call</text>
+        <rect class="fill-accent" x="90" y="34" width="12" height="12" rx="2"/>
+        <text class="t-sm" x="108" y="44">history so far: +4K per step (model output + tool results)</text>
+        <text class="t-b" x="90" y="82">200K input tokens in total</text>
+        <text class="t-sm t-muted" x="90" y="98">for a conversation that never exceeds 38K</text>
+
+        <line class="e-line" x1="70" y1="200" x2="680" y2="200"/>
+        <line class="e-line" x1="70" y1="150" x2="680" y2="150"/>
+        <line class="e-line" x1="70" y1="100" x2="680" y2="100"/>
+        <line class="e-line" x1="70" y1="50" x2="680" y2="50"/>
+        <text class="t-sm t-muted" x="62" y="254" text-anchor="end">0</text>
+        <text class="t-sm t-muted" x="62" y="204" text-anchor="end">10K</text>
+        <text class="t-sm t-muted" x="62" y="154" text-anchor="end">20K</text>
+        <text class="t-sm t-muted" x="62" y="104" text-anchor="end">30K</text>
+        <text class="t-sm t-muted" x="62" y="54" text-anchor="end">40K</text>
+        <text class="t-sm t-muted" x="20" y="150" text-anchor="middle" transform="rotate(-90 20 150)">input tokens per call</text>
+
+        <rect class="fill-violet" x="82" y="240" width="36" height="10"/>
+        <rect class="fill-violet" x="142" y="240" width="36" height="10"/><rect class="fill-accent" x="142" y="220" width="36" height="20"/>
+        <rect class="fill-violet" x="202" y="240" width="36" height="10"/><rect class="fill-accent" x="202" y="200" width="36" height="40"/>
+        <rect class="fill-violet" x="262" y="240" width="36" height="10"/><rect class="fill-accent" x="262" y="180" width="36" height="60"/>
+        <rect class="fill-violet" x="322" y="240" width="36" height="10"/><rect class="fill-accent" x="322" y="160" width="36" height="80"/>
+        <rect class="fill-violet" x="382" y="240" width="36" height="10"/><rect class="fill-accent" x="382" y="140" width="36" height="100"/>
+        <rect class="fill-violet" x="442" y="240" width="36" height="10"/><rect class="fill-accent" x="442" y="120" width="36" height="120"/>
+        <rect class="fill-violet" x="502" y="240" width="36" height="10"/><rect class="fill-accent" x="502" y="100" width="36" height="140"/>
+        <rect class="fill-violet" x="562" y="240" width="36" height="10"/><rect class="fill-accent" x="562" y="80" width="36" height="160"/>
+        <rect class="fill-violet" x="622" y="240" width="36" height="10"/><rect class="fill-accent" x="622" y="60" width="36" height="180"/>
+        <line class="e-muted" x1="70" y1="250" x2="680" y2="250"/>
+
+        <text class="t-sm" x="100" y="234" text-anchor="middle">2K</text>
+        <text class="t-sm" x="340" y="154" text-anchor="middle">18K</text>
+        <text class="t-sm t-b" x="640" y="54" text-anchor="middle">38K</text>
+
+        <text class="t-sm t-muted" x="100" y="268" text-anchor="middle">1</text>
+        <text class="t-sm t-muted" x="160" y="268" text-anchor="middle">2</text>
+        <text class="t-sm t-muted" x="220" y="268" text-anchor="middle">3</text>
+        <text class="t-sm t-muted" x="280" y="268" text-anchor="middle">4</text>
+        <text class="t-sm t-muted" x="340" y="268" text-anchor="middle">5</text>
+        <text class="t-sm t-muted" x="400" y="268" text-anchor="middle">6</text>
+        <text class="t-sm t-muted" x="460" y="268" text-anchor="middle">7</text>
+        <text class="t-sm t-muted" x="520" y="268" text-anchor="middle">8</text>
+        <text class="t-sm t-muted" x="580" y="268" text-anchor="middle">9</text>
+        <text class="t-sm t-muted" x="640" y="268" text-anchor="middle">10</text>
+        <text class="t-sm t-muted" x="375" y="292" text-anchor="middle">agent step (one model call each)</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 1.5</b>Input tokens per call in a 10-step agent, drawn to scale. Adding up all ten bars gives the bill: 200K input tokens, about five times the largest single request. Compare this with your Predict answer 2.</figcaption>
+  </figure>
+
+  <div class="formula">
+    total_input ≈ n·b + a·n(n−1)/2<br>
+    <span class="muted">b = base tokens per call · a = tokens added per step · n = steps</span><br><br>
+    n = 10:&nbsp; 10·2K + 4K·45&nbsp; = 200K<br>
+    n = 20:&nbsp; 20·2K + 4K·190 = 800K&nbsp; <span class="muted">← twice the steps, four times the tokens</span>
+  </div>
+
+  <p>The <em>n</em>² term is why long-running agents get expensive, and it's one of the honest arguments for multi-agent designs. Five workers with 8 steps each re-send far less history than one agent with 40 steps, because each worker starts with an empty context.</p>
+
+  <h3>Prompt caching softens this but doesn't remove it</h3>
+  <p>Providers can cache the processed form of a prompt <em>prefix</em>. If the next request starts with exactly the same tokens, that part is read from cache, which is faster and billed at a fraction of the normal input price. The catch is that it's a prefix match. Change one byte early in the prompt, such as a timestamp in the system prompt or a reordered tool list, and everything after that byte is a cache miss. The rule is simple: put stable content first (tools, then system prompt, then old history) and changing content last. Chapter 06 goes deeper.</p>
+
+  <h2 id="nondeterminism">Non-determinism</h2>
+  <p>Generation samples from a distribution (Figure 1.1), so the same input can produce different outputs. You can't fully turn this off. Anthropic's current API doesn't accept the sampling parameters at all (temperature, top_p, top_k). Even on stacks that do, “temperature 0” isn't bit-for-bit repeatable, because batching and floating-point arithmetic vary between runs. Model upgrades change behavior too.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 200" role="img" aria-label="The same task and prompt run three times. Run 1 succeeds in 5 calls. Run 2 diverges at step 3 and still succeeds, by a different path. Run 3 diverges at step 2 and picks the wrong tool.">
+        <rect class="n-plain" x="20" y="76" width="150" height="48" rx="6"/>
+        <text class="t-b" x="95" y="96" text-anchor="middle">same task</text>
+        <text class="t-sm t-muted" x="95" y="112" text-anchor="middle">same prompt</text>
+        <path class="e-muted" d="M170,100 C195,100 195,40 220,40"/>
+        <path class="e-muted" d="M170,100 L220,100"/>
+        <path class="e-muted" d="M170,100 C195,100 195,160 220,160"/>
+        <line class="e-line" x1="220" y1="40" x2="528" y2="40"/>
+        <line class="e-line" x1="220" y1="100" x2="528" y2="100"/>
+        <line class="e-line" x1="220" y1="160" x2="528" y2="160"/>
+
+        <circle class="n-plain" cx="240" cy="40" r="7"/><circle class="n-plain" cx="310" cy="40" r="7"/><circle class="n-plain" cx="380" cy="40" r="7"/><circle class="n-plain" cx="450" cy="40" r="7"/><circle class="n-accent" cx="520" cy="40" r="7"/>
+        <text class="t-sm" x="542" y="44">correct · 5 calls</text>
+
+        <circle class="n-plain" cx="240" cy="100" r="7"/><circle class="n-plain" cx="310" cy="100" r="7"/><circle class="n-amber" cx="380" cy="100" r="7"/><circle class="n-amber" cx="450" cy="100" r="7"/><circle class="n-amber" cx="520" cy="100" r="7"/>
+        <text class="t-sm t-amber" x="542" y="104">correct, by another path</text>
+        <text class="t-xs t-muted" x="380" y="124" text-anchor="middle">diverges at step 3</text>
+
+        <circle class="n-plain" cx="240" cy="160" r="7"/><circle class="n-red" cx="310" cy="160" r="7"/><circle class="n-red" cx="380" cy="160" r="7"/><circle class="n-red" cx="450" cy="160" r="7"/><circle class="n-red" cx="520" cy="160" r="7"/>
+        <text class="t-sm t-red" x="542" y="164">wrong tool → wrong answer</text>
+        <text class="t-xs t-muted" x="310" y="186" text-anchor="middle">a different token at step 2</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 1.6</b>Small differences compound. One different token early on can send the whole trajectory somewhere else. A single successful run tells you very little about how an agent behaves.</figcaption>
+  </figure>
+
+  <p>Design for this from the start rather than fighting it:</p>
+  <ul>
+    <li><strong>Test the harness with a fake model</strong> that returns scripted responses. Your harness logic (spawning, budgets, failure handling) should be fully deterministic even though the model isn't. This is principle 2.9 in your spec.</li>
+    <li><strong>Evaluate over many runs</strong>, not one. Chapter 13 explains the difference between “passes at least once in <em>k</em> tries” and “passes all <em>k</em> times”.</li>
+    <li><strong>Validate everything</strong> that crosses from model to action (Figure 1.4).</li>
+  </ul>
+
+  <h2 id="limits" data-short="Limits → harness">What the model can't do, and who does it instead</h2>
+  <p>This table is the map for the rest of the guide. Each row is a limitation of the bare model, and the harness responsibility it creates.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>The model alone…</th><th>So the harness must…</th><th>Chapter</th></tr></thead>
+      <tbody>
+        <tr><td>keeps no state between calls</td><td>store and re-send history; retrieve memory when needed</td><td>06, 07</td></tr>
+        <tr><td>can only produce text, including tool requests</td><td>run the tools and return the results</td><td>04</td></tr>
+        <tr><td>gives one response per call</td><td>run the loop and decide when to stop</td><td>03, 09</td></tr>
+        <tr><td>has no idea of cost, time or limits</td><td>meter tokens, steps and time; enforce budgets</td><td>11</td></tr>
+        <tr><td>sometimes produces wrong or malformed output</td><td>validate, retry, fall back</td><td>11</td></tr>
+        <tr><td>follows instructions found anywhere in its context</td><td>isolate untrusted input; limit permissions</td><td>12</td></tr>
+        <tr><td>is opaque from the outside</td><td>trace every step; evaluate outcomes</td><td>13</td></tr>
+        <tr><td>follows one line of thought per call</td><td>run many calls concurrently and combine them</td><td>10, 14–16</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="box pitfall">
+    <span class="box-label">Misconceptions to drop</span>
+    <ul>
+      <li>“The model remembers the conversation.” Your code sends it again.</li>
+      <li>“The model called the tool.” It wrote a request. Your code ran it.</li>
+      <li>“Structured output means valid data.” It means valid <em>shape</em>.</li>
+      <li>“Temperature 0 makes it deterministic.” Not reliably, and some APIs no longer accept it.</li>
+      <li>“A bigger context window means better memory.” More room doesn't mean better attention (Chapter 06).</li>
+    </ul>
+  </div>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Stage 1.</strong> Your budget object counts tokens before there's any LLM. Give every trace event input- and output-token fields now, so Stage 4 only has to fill them in.</li>
+      <li><strong>Stage 4.</strong> You'll wrap the model behind your own thin client interface, with a fake implementation for tests. Design question for you: what fields must your response object carry so that the runner never needs to know which provider produced it? (Hint: look at the response JSON above and decide what's essential.)</li>
+      <li><strong>Stage 4.</strong> Your plan validator is Figure 1.4. Which of the four checks can the API enforce for you, and which must your code do?</li>
+      <li><strong>Stage 5–6.</strong> Figure 1.5 is why you track cumulative tokens per agent, not just per call. A child that runs 30 steps can cost more than the whole tree around it.</li>
+    </ul>
+  </div>
+
+  <h2 id="check">Check yourself</h2>
+  <p>Answer each one out loud or on paper before you open it.</p>
+  <div class="quiz">
+    <details>
+      <summary><span class="tag recall">Recall</span> Why is “the model remembers the conversation” misleading?</summary>
+      <div><p>The model is stateless. The client stores the conversation and sends all of it on every call. Memory is a harness feature built on re-sending or retrieving context, not a property of the model.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag recall">Recall</span> What is the difference between the generation loop and the agent loop?</summary>
+      <div><p>The generation loop runs inside the provider during one call: one forward pass per token, until a stop condition. The agent loop runs in your code across many calls: call the model, run any requested tools, append the results, call again. You control the second loop completely.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> Your 10-step agent becomes a 30-step agent (same 2K base, +4K per step). Roughly how do total input tokens change, and what three levers reduce them?</summary>
+      <div><p>30·2K + 4K·(30·29/2) = 60K + 1,740K ≈ 1.8M, which is about 9× the 200K. Three times the steps means about nine times the tokens. Levers: prompt caching for the repeated prefix (cheaper, not fewer, tokens); trimming or summarizing old tool results; and splitting the work across sub-agents, each with its own small context.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> Which stop_reason values must an agent loop handle, and what does each mean for control flow?</summary>
+      <div><p><code>end_turn</code>: done, return the answer. <code>tool_use</code>: run the tools, append the results, loop. <code>max_tokens</code>: truncated, so continue or fail, but never treat it as complete. <code>pause_turn</code>: re-send to let a server-side tool finish. <code>refusal</code>: surface it, don't retry blindly. <code>stop_sequence</code>: one of your custom stop strings was hit.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> A planner returns valid JSON with 40 subtasks, two of which repeat the parent's own task. Which validation layers catch this, and what should happen next?</summary>
+      <div><p>Syntax and schema pass. The semantic layer should catch the duplicates and the self-delegation. The policy layer should catch “40 exceeds the fan-out limit”. Next: reject before creating anything, then either re-prompt with the specific errors (bounded retries) or fail the step as data. Never execute part of it and hope.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “Why not just set temperature to 0 and make the agent deterministic?”</summary>
+      <div><p>Some current APIs don't accept sampling parameters at all. Where they do, temperature 0 still isn't bit-exact, because batching and floating-point arithmetic vary. Model versions change behavior. And in an agent, tiny differences compound over many steps. So design for non-determinism: deterministic harness tests with a fake model, validation at every boundary, bounded retries, and evaluation over many runs.</p></div>
+    </details>
+  </div>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><strong>Anthropic, Claude API documentation:</strong> the Messages API reference, “Handling stop reasons”, “Structured outputs”, “Prompt caching”.<span class="why">The source for every field name and stop reason in this chapter. Check them when the API changes.</span></li>
+    <li><strong>Andrej Karpathy, “Deep Dive into LLMs like ChatGPT”</strong> (video lecture, 2025).<span class="why">Tokenization, sampling and next-token prediction from first principles. Watch the first hour.</span></li>
+    <li><strong>Andrej Karpathy, “Intro to Large Language Models”</strong> (talk, 2023).<span class="why">The “LLM as an operating system kernel, context window as RAM” framing that Chapters 06 and 07 build on.</span></li>
+    <li><strong>Nelson F. Liu et al., “Lost in the Middle: How Language Models Use Long Contexts”</strong> (TACL, 2024).<span class="why">Evidence that a long context doesn't mean good recall. A preview of Chapter 06.</span></li>
+    <li><strong>Erik Schluntz and Barry Zhang, “Building effective agents”</strong> (Anthropic, 2024).<span class="why">Introduces the “augmented LLM” building block. Your Round 2 reading, and the basis of Chapter 02.</span></li>
+  </ul>
+
+  <section class="recall-card" aria-labelledby="recall-01">
+    <h2 id="recall-01" data-short="Recall card">Recall card</h2>
+    <p class="muted small">Five lines to rehearse. If you can expand each into a minute of explanation, you know this chapter.</p>
+    <ol>
+      <li>An LLM is a stateless function: context in, next-token probabilities out, sampled one token at a time.</li>
+      <li>Every call re-sends everything. “Memory” is the harness re-sending or retrieving context.</li>
+      <li><code>stop_reason</code> is the first branch in any agent loop. <code>tool_use</code> keeps the loop going.</li>
+      <li>Input tokens across an agent run grow with the square of the step count. Caching reduces the price, not the growth.</li>
+      <li>Model output is a proposal. Check syntax, schema, semantics and policy before acting on it.</li>
+    </ol>
+  </section>
+
+  <div class="done">
+    <input type="checkbox" id="done-toggle" data-chapter="01">
+    <label for="done-toggle">I can explain this chapter without notes<small>Saved in this browser only. It updates the count on the guide's home page.</small></label>
+  </div>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="../index.html"><small>Back to</small>Guide home</a>
+    <a class="next" href="02-workflows-vs-agents.html"><small>Next · Chapter 02</small>Workflows vs agents</a>
+  </nav>
+</main>
+<aside class="toc-rail" aria-label="On this page"><p class="toc-title">In this chapter</p><nav data-toc></nav></aside>
+</div>
+</body>
+</html>

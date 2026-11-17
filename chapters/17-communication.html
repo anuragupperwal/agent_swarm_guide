@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Communication and Coordination · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="../index.html">Loop <span>→</span> Swarm</a>
+    <div class="crumbs"><a href="../index.html">Guide</a> · Part 4 · Multi-agent · Chapter 17</div>
+    <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+  </div>
+</header>
+
+<div class="page has-toc">
+<main class="chapter">
+
+  <header class="ch-head">
+    <p class="eyebrow"><b>Part 4 · Multi-agent systems</b> · Chapter 17 · Level L4</p>
+    <h1>Communication and coordination</h1>
+    <p class="lede">So far, information in your tree has moved in only two directions: a task goes down to a child, and a result comes back up. This chapter is about everything else: agents talking sideways, waiting on each other, sharing a workspace, and agreeing. Every channel you add is a new way for the system to work, and a new way for it to fail.</p>
+    <ul class="ch-meta">
+      <li><b>60 min</b> reading</li>
+      <li>Builds on: <b>Ch 10, 15, 16</b></li>
+      <li>Your project: <b>Stage 7</b></li>
+    </ul>
+    <ol class="where" aria-label="Where this chapter sits in the guide">
+      <li class="past"><span>Part 1</span>Foundations</li>
+      <li class="past"><span>Part 2</span>Thinking &amp; memory</li>
+      <li class="past"><span>Part 3</span>The harness</li>
+      <li class="here"><span>Part 4</span>Multi-agent</li>
+      <li><span>Part 5</span>Together</li>
+    </ol>
+  </header>
+
+  <details class="toc-mobile"><summary>In this chapter</summary><div data-toc></div></details>
+
+  <div class="box predict">
+    <span class="box-label">Predict first · 10 min</span>
+    <p>Write answers in <code>docs/LEARNING_NOTES.md</code> under “Guide ch17”. Tag each one <em>sure</em> or <em>guess</em>. Don't read on until you're done.</p>
+    <ol>
+      <li>Two sibling agents research overlapping topics, and they can't message each other. What goes wrong? What is the simplest fix that does <em>not</em> add messaging?</li>
+      <li>In asyncio, agent A awaits a reply from B while B awaits a reply from A. What happens to the program? Which single parameter turns this silent hang into a visible error?</li>
+      <li>Ten agents, and every agent can message every other agent directly. How many distinct two-way channels is that? How many for twenty?</li>
+    </ol>
+  </div>
+
+  <h2 id="gate" data-short="Do you need it?">First question: do you need agents to talk at all?</h2>
+  <p>In a pure orchestrator-worker tree (Chapter 16), children never talk to each other. The parent writes a task, the child runs in isolation, and the child returns one result. That design is simple for a reason: an isolated child can't be confused, delayed or poisoned by a sibling. Its trace reads top to bottom. Its failure stays inside its own branch.</p>
+  <p>Messaging between agents breaks that isolation on purpose. It is worth it only when one of these is true:</p>
+  <ul>
+    <li><strong>Information is needed <em>during</em> a sibling's run</strong>, not after it. Waiting for the parent to collect results and re-plan would be too slow or too late.</li>
+    <li><strong>Work would be duplicated</strong> because siblings can't see what the others have already claimed or found.</li>
+    <li><strong>Work has to be negotiated</strong>: who is free, who is best suited, who takes which piece.</li>
+    <li><strong>An agent lives longer than one task</strong>: a service agent (a reviewer, a librarian) that many others query.</li>
+  </ul>
+  <p>Most of the time, there is a cheaper option than messaging:</p>
+  <div class="cols-3">
+    <div class="card"><h4>Re-plan between waves</h4><p>Children run, return, and the parent reads all results and spawns the next wave with better tasks. The information still flows, just once per wave.</p></div>
+    <div class="card"><h4>A shared artifact store</h4><p>Children write findings to named files or keys. Later children read them. There's no conversation, only a written record.</p></div>
+    <div class="card"><h4>Better decomposition</h4><p>If two siblings keep needing each other, the split was wrong. Give the overlap to one child, or make the subtasks disjoint.</p></div>
+  </div>
+  <div class="box stop">
+    <span class="box-label">Stage 7 gate</span>
+    <p>Before you write any messaging code, write one sentence in your notes: <em>“My demo task needs agents to exchange information during their runs because …”</em>. Name the concrete task. If the sentence ends with “it would be cool” or “real swarms do it”, build one of the three cards above instead and come back when a trace shows you need more.</p>
+  </div>
+
+  <h2 id="two-models" data-short="Two models">Two ways to share information</h2>
+  <p>There are only two basic ways for concurrent workers to share information. Every pattern in this chapter is one of them, or a mix.</p>
+  <dl class="defs">
+    <dt>Shared state</dt><dd>Everyone reads and writes one place: a dict, a file, a database table. Nobody sends anything to anybody. Coordination is implicit: you see what others did by looking at the shared place.</dd>
+    <dt>Message passing</dt><dd>Each agent owns its state privately. The only way to influence another agent is to send it a message, which lands in its inbox. All sharing is explicit, and every interaction is visible as an event.</dd>
+  </dl>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 280" role="img" aria-label="Left: shared state. Agents A, B and C all read from or write to one shared store; the risk is that two agents write the same key and one update is lost. Right: message passing. Agents A, B and C each own their state and an inbox, and send query, inform and result messages to each other.">
+        <defs>
+          <marker id="f1701-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1701-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-caps t-muted" x="20" y="22">shared state</text>
+        <text class="t-caps t-muted" x="392" y="22">message passing</text>
+        <line class="e-line" x1="360" y1="10" x2="360" y2="272"/>
+
+        <rect class="n-plain" x="22" y="40" width="96" height="40" rx="6"/><text class="t-b" x="70" y="65" text-anchor="middle">agent A</text>
+        <rect class="n-plain" x="232" y="40" width="96" height="40" rx="6"/><text class="t-b" x="280" y="65" text-anchor="middle">agent B</text>
+        <rect class="n-plain" x="127" y="200" width="96" height="40" rx="6"/><text class="t-b" x="175" y="225" text-anchor="middle">agent C</text>
+        <rect class="n-amber" x="105" y="110" width="140" height="56" rx="6"/>
+        <text class="t-b" x="175" y="134" text-anchor="middle">shared store</text>
+        <text class="t-xs t-muted" x="175" y="152" text-anchor="middle">facts · claims · plan</text>
+        <line x1="90" y1="80" x2="140" y2="108" marker-end="url(#f1701-ah)"/>
+        <text class="t-sm" x="108" y="102" text-anchor="end">write</text>
+        <line x1="210" y1="108" x2="260" y2="80" marker-end="url(#f1701-ah)"/>
+        <text class="t-sm" x="242" y="102">read</text>
+        <line x1="175" y1="198" x2="175" y2="168" marker-start="url(#f1701-ah)" marker-end="url(#f1701-ah)"/>
+        <text class="t-sm" x="183" y="187">read · write</text>
+        <text class="t-sm t-muted" x="20" y="258">agents never talk; they meet in one place</text>
+        <text class="t-sm t-red" x="20" y="274">risk: A and C write the same key → lost update</text>
+
+        <rect class="n-plain" x="392" y="40" width="96" height="40" rx="6"/><text class="t-b" x="440" y="57" text-anchor="middle">A</text><text class="t-xs t-muted" x="440" y="72" text-anchor="middle">state + inbox</text>
+        <rect class="n-plain" x="604" y="40" width="96" height="40" rx="6"/><text class="t-b" x="652" y="57" text-anchor="middle">B</text><text class="t-xs t-muted" x="652" y="72" text-anchor="middle">state + inbox</text>
+        <rect class="n-plain" x="498" y="200" width="96" height="40" rx="6"/><text class="t-b" x="546" y="217" text-anchor="middle">C</text><text class="t-xs t-muted" x="546" y="232" text-anchor="middle">state + inbox</text>
+        <line class="e-accent" x1="488" y1="56" x2="602" y2="56" marker-end="url(#f1701-aha)"/>
+        <text class="t-sm t-accent" x="545" y="50" text-anchor="middle">query</text>
+        <line class="e-accent" x1="640" y1="80" x2="578" y2="198" marker-end="url(#f1701-aha)"/>
+        <text class="t-sm t-accent" x="618" y="144">inform</text>
+        <line class="e-accent" x1="512" y1="198" x2="452" y2="82" marker-end="url(#f1701-aha)"/>
+        <text class="t-sm t-accent" x="474" y="144" text-anchor="end">result</text>
+        <text class="t-sm t-muted" x="392" y="258">each agent owns its state; all sharing is explicit</text>
+        <text class="t-sm t-accent" x="392" y="274">cost: more plumbing, every message is designed</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 17.1</b>The two models. Shared state is cheap to start and hard to reason about, because any agent can change anything at any time. Message passing is more work up front, but every interaction becomes a logged event you can replay.</figcaption>
+  </figure>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th></th><th>Shared state</th><th>Message passing</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Coupling</strong></td><td>Agents depend on the store's layout, not on each other</td><td>Agents depend on each other's addresses and message types</td></tr>
+        <tr><td><strong>Typical bug</strong></td><td>Lost update, stale read, check-then-act race</td><td>Deadlock, lost or duplicated message, unbounded inbox</td></tr>
+        <tr><td><strong>Visibility</strong></td><td>You see the latest state, not who changed it (unless you log writes)</td><td>Every interaction is an event with a sender and a time</td></tr>
+        <tr><td><strong>Context cost</strong></td><td>An agent reads only what it asks for</td><td>Every delivered message lands in the receiver's context</td></tr>
+        <tr><td><strong>Good for</strong></td><td>Accumulating facts, claiming work, final artifacts</td><td>Questions, negotiation, handing off control</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>The Go community has a proverb for this: <em>“Don't communicate by sharing memory; share memory by communicating.”</em> The idea is much older. Carl Hewitt's <strong>actor model</strong> (1973) describes a system made of actors that share nothing. An actor can do only three things when a message arrives: send messages to actors it knows, create new actors, and decide how to handle its next message. An LLM agent with an inbox is very close to an actor. The main difference is that each “handle a message” step costs a model call.</p>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p>In a single asyncio process, “shared state” and “message passing” are both just Python objects in one memory space. The difference is a <em>discipline</em> you impose: who is allowed to touch what, and whether every interaction leaves an event in the trace. Pick the discipline first, then the data structure.</p>
+  </div>
+
+  <h2 id="mailboxes">Mailboxes and queues</h2>
+  <p>A <strong>mailbox</strong> (inbox) is a queue owned by one agent. Others put messages in; only the owner takes them out. In asyncio this is <code>asyncio.Queue</code>, and its behavior is worth knowing exactly:</p>
+  <dl class="defs">
+    <dt>await q.put(m)</dt><dd>Adds a message. If the queue was created with <code>maxsize</code> and is full, the sender <em>waits</em> until there is room. That waiting is <strong>backpressure</strong>: a slow receiver slows its senders down instead of growing without limit.</dd>
+    <dt>q.put_nowait(m)</dt><dd>Adds without waiting. Raises <code>asyncio.QueueFull</code> if the queue is full, so the sender must decide what to do: drop it, retry later, or report an error.</dd>
+    <dt>await q.get()</dt><dd>Takes the oldest message, waiting if the queue is empty. An agent awaiting <code>get()</code> uses no CPU and no tokens.</dd>
+    <dt>q.get_nowait()</dt><dd>Takes a message or raises <code>asyncio.QueueEmpty</code>. Useful for “drain whatever is there, then continue”.</dd>
+    <dt>q.task_done() / await q.join()</dt><dd>A counter of finished items. <code>join()</code> returns when every item put has been marked done. Handy for “wait until all work is processed”.</dd>
+  </dl>
+  <p>Now the question that matters for an LLM agent: <em>when</em> does the agent read its inbox? A model call can't be interrupted halfway to insert a message. So the inbox is read at <strong>step boundaries</strong>, between one model call and the next:</p>
+
+  <p class="code-label">An agent loop with an inbox (pseudocode)</p>
+<pre><code><span class="k">async def</span> run(self):
+    <span class="k">while not</span> self.done():
+        response = <span class="k">await</span> llm.complete(self.context, tools=self.tools)
+        self.context.append(response)
+        <span class="k">for</span> call <span class="k">in</span> response.tool_calls:
+            result = <span class="k">await</span> self.execute(call)        <span class="c"># may include send_message(...)</span>
+            self.context.append(result)
+        <span class="hl"><span class="k">for</span> msg <span class="k">in</span> self.inbox.drain(limit=<span class="n">5</span>):       <span class="c"># bounded: messages cost tokens</span></span>
+            self.context.append(as_user_block(msg))</code></pre>
+
+  <p>Three consequences follow from that one highlighted line:</p>
+  <ul>
+    <li><strong>Latency.</strong> A message sent now is seen only after the receiver's current model call (and tool runs) finish. That can be tens of seconds. Messaging between LLM agents is slow by design.</li>
+    <li><strong>Token cost.</strong> Every delivered message becomes part of the receiver's context and is re-sent on every later call (the n² growth from Chapter 01). Ten chatty siblings can fill each other's windows with noise.</li>
+    <li><strong>Trust.</strong> A message from another agent is text the receiver will read as instructions. It can carry a prompt injection that one agent picked up from a web page (Chapter 12). Mark messages clearly as coming from a peer, and never give peer messages the authority of the system prompt.</li>
+  </ul>
+
+  <div class="box pitfall">
+    <span class="box-label">Pitfall</span>
+    <p>An unbounded <code>asyncio.Queue()</code> (the default, <code>maxsize=0</code>) never applies backpressure. If one agent produces messages faster than another reads them, memory and the receiver's future context both grow without limit, and nothing complains. Set a <code>maxsize</code>, and decide in advance what happens on <code>QueueFull</code>.</p>
+  </div>
+
+  <h2 id="patterns" data-short="Request/reply">Request/reply vs fire-and-forget</h2>
+  <p>Once agents can send messages, every send is one of two kinds. Either the sender needs an answer before it can continue (request/reply), or it doesn't (fire-and-forget, also called a notification).</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 262" role="img" aria-label="Two sequence diagrams. Left, request/reply: A sends a request with id 42 to B, waits with a 30-second timeout while B works, and resumes when B's reply with correlation id 42 arrives. Right, fire-and-forget: A sends a notify message into B's inbox and keeps working; B reads it at its next step; A never learns whether B acted.">
+        <defs>
+          <marker id="f1702-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1702-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1702-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-caps t-muted" x="20" y="18">request / reply</text>
+        <text class="t-caps t-muted" x="390" y="18">fire-and-forget</text>
+        <line class="e-line" x1="360" y1="8" x2="360" y2="256"/>
+
+        <rect class="n-plain" x="40" y="28" width="80" height="28" rx="5"/><text class="t-b" x="80" y="47" text-anchor="middle">agent A</text>
+        <rect class="n-plain" x="230" y="28" width="80" height="28" rx="5"/><text class="t-b" x="270" y="47" text-anchor="middle">agent B</text>
+        <line class="e-line e-dash" x1="80" y1="56" x2="80" y2="240"/>
+        <line class="e-line e-dash" x1="270" y1="56" x2="270" y2="240"/>
+        <line x1="86" y1="92" x2="262" y2="92" marker-end="url(#f1702-ah)"/>
+        <text class="t-mono" x="175" y="85" text-anchor="middle">request · id=42</text>
+        <rect class="n-amber" x="74" y="96" width="12" height="110" rx="2"/>
+        <text class="t-sm t-amber" x="94" y="146">A waits on a future</text>
+        <text class="t-sm t-amber" x="94" y="161">timeout = 30 s</text>
+        <rect class="n-accent" x="264" y="96" width="12" height="98" rx="2"/>
+        <text class="t-sm t-accent" x="284" y="146">B works</text>
+        <line class="e-accent" x1="264" y1="200" x2="88" y2="200" marker-end="url(#f1702-aha)"/>
+        <text class="t-sm t-accent" x="175" y="193" text-anchor="middle">reply · correlation_id=42</text>
+        <text class="t-sm" x="94" y="228">A resumes with the answer</text>
+
+        <rect class="n-plain" x="410" y="28" width="80" height="28" rx="5"/><text class="t-b" x="450" y="47" text-anchor="middle">agent A</text>
+        <rect class="n-plain" x="600" y="28" width="80" height="28" rx="5"/><text class="t-b" x="640" y="47" text-anchor="middle">agent B</text>
+        <line class="e-line e-dash" x1="450" y1="56" x2="450" y2="240"/>
+        <line class="e-line e-dash" x1="640" y1="56" x2="640" y2="240"/>
+        <line x1="456" y1="94" x2="650" y2="94" marker-end="url(#f1702-ah)"/>
+        <text class="t-mono" x="548" y="86" text-anchor="middle">notify(found=doc_17)</text>
+        <rect class="n-sunken" x="652" y="84" width="52" height="20" rx="3"/><text class="t-xs" x="678" y="98" text-anchor="middle">inbox</text>
+        <rect class="n-accent" x="444" y="98" width="12" height="140" rx="2"/>
+        <text class="t-sm t-accent" x="464" y="128">A keeps working</text>
+        <path class="e-muted e-dash" d="M678,104 V156 H650" marker-end="url(#f1702-ahm)"/>
+        <rect class="n-accent" x="634" y="150" width="12" height="50" rx="2"/>
+        <text class="t-sm" x="626" y="180" text-anchor="end">B reads it at its next step</text>
+        <text class="t-sm t-red" x="390" y="256">no reply: A never learns whether B acted</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 17.2</b>The two kinds of send. Request/reply buys certainty and costs waiting time, plus the risk of waiting forever. Fire-and-forget never blocks, but the sender learns nothing. The <code>id</code> and <code>correlation_id</code> fields are how a reply finds the request it answers.</figcaption>
+  </figure>
+
+  <p>Request/reply over a queue needs one piece of machinery: a way to match each reply to the request that caused it. A sender may have several requests in flight, and replies can arrive in any order. The standard answer is a <strong>correlation id</strong> plus a table of pending futures:</p>
+
+  <p class="code-label">Request/reply on top of a message bus (pseudocode)</p>
+<pre><code>pending: dict[str, asyncio.Future] = {}
+
+<span class="k">async def</span> request(to, content, timeout=<span class="n">30</span>):
+    msg = Message(type=<span class="s">"request"</span>, to=to, content=content, msg_id=new_id())
+    fut = asyncio.get_running_loop().create_future()
+    pending[msg.msg_id] = fut
+    <span class="k">await</span> bus.send(msg)
+    <span class="k">try</span>:
+        <span class="hl"><span class="k">return await</span> asyncio.wait_for(fut, timeout)</span>       <span class="c"># a hang becomes TimeoutError</span>
+    <span class="k">finally</span>:
+        pending.pop(msg.msg_id, <span class="k">None</span>)                 <span class="c"># no leak, even on timeout</span>
+
+<span class="k">def</span> on_reply(msg):                                   <span class="c"># called by the bus for type="reply"</span>
+    fut = pending.get(msg.correlation_id)
+    <span class="k">if</span> fut <span class="k">and not</span> fut.done():                      <span class="c"># late replies are dropped</span>
+        fut.set_result(msg.content)</code></pre>
+
+  <p>Read it line by line. The future is a placeholder for “the answer, later”. <code>wait_for</code> is the single parameter from your Predict question 2: without a timeout, a reply that never comes means this coroutine waits forever, silently. With a timeout, the wait becomes a <code>TimeoutError</code> your harness can log and handle. The <code>finally</code> clause removes the pending entry whether the reply came, the timeout fired, or the task was cancelled.</p>
+
+  <h3>Delivery guarantees</h3>
+  <p>Inside one Python process, a <code>put</code> that succeeds really does deliver. Across processes or machines it doesn't, and distributed-systems vocabulary becomes useful:</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Guarantee</th><th>Meaning</th><th>What the receiver must do</th></tr></thead>
+      <tbody>
+        <tr><td><strong>At-most-once</strong></td><td>Send once, never retry. A message can be lost, never duplicated.</td><td>Nothing, but accept losses.</td></tr>
+        <tr><td><strong>At-least-once</strong></td><td>Retry until acknowledged. Nothing is lost, but duplicates happen.</td><td>Be <strong>idempotent</strong>: skip a <code>msg_id</code> it has already processed.</td></tr>
+        <tr><td><strong>“Exactly-once”</strong></td><td>Not achievable as pure delivery over an unreliable network.</td><td>Build it as at-least-once delivery plus idempotent processing.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Duplicates hurt LLM agents more than ordinary services. A duplicated “please research X” message costs a full sub-run of tokens, and it may produce a second, slightly different answer that someone then has to reconcile.</p>
+
+  <h2 id="addressing" data-short="Addressing &amp; schema">Addressing, discovery and the message schema</h2>
+  <p>To send a message, the sender must name a receiver. There are three ways to do that, from simple to flexible:</p>
+  <dl class="defs">
+    <dt>Direct address</dt><dd>The sender knows the receiver's id (<code>agent-7</code>). Simple and traceable. It only works when the sender already knows who exists, which in a tree usually means a parent addressing its own children.</dd>
+    <dt>Registry lookup</dt><dd>A <strong>registry</strong> maps ids to live agents, along with their role and status. A sender asks “who is <code>reviewer</code>?” and gets an id. Your Stage 3–5 agent registry is already most of this.</dd>
+    <dt>Capability lookup</dt><dd>The sender asks “who can <em>do</em> SQL review?” and the registry matches a description of the need against descriptions of what each agent offers. Flexible, and also where things go wrong, because matching text to text is fuzzy. A2A's agent cards (later in this chapter) are a standard version of this.</dd>
+  </dl>
+  <p>Whatever the addressing, define the message as a data structure, never as free text. Here is one possible shape. Treat it as a menu of fields to consider, not a standard:</p>
+
+  <p class="code-label">One message on the wire (JSON)</p>
+<pre><code>{
+  <span class="s">"msg_id"</span>: <span class="s">"m-0193"</span>,
+  <span class="s">"run_id"</span>: <span class="s">"run-2026-11-16-a"</span>,
+  <span class="s">"from"</span>: <span class="s">"agent-4"</span>,
+  <span class="s">"to"</span>: <span class="s">"agent-7"</span>,
+  <span class="s">"type"</span>: <span class="s">"request"</span>,
+  <span class="s">"performative"</span>: <span class="s">"query"</span>,
+  <span class="s">"correlation_id"</span>: <span class="k">null</span>,
+  <span class="s">"reply_to"</span>: <span class="s">"agent-4"</span>,
+  <span class="s">"topic"</span>: <span class="k">null</span>,
+  <span class="s">"content"</span>: { <span class="s">"question"</span>: <span class="s">"Which retry policy did you find for 429s?"</span> },
+  <span class="s">"sent_at"</span>: <span class="s">"2026-11-16T10:42:07Z"</span>,
+  <span class="hl"><span class="s">"ttl_s"</span>: <span class="n">60</span>,
+  <span class="s">"hop_count"</span>: <span class="n">1</span></span>
+}</code></pre>
+  <dl class="defs">
+    <dt>msg_id</dt><dd>Unique per message. Used for deduplication and as the target of a reply's <code>correlation_id</code>.</dd>
+    <dt>run_id</dt><dd>Which run this belongs to, so a stray message from a previous run can be rejected.</dd>
+    <dt>from / to</dt><dd>Sender and receiver. The harness sets <code>from</code>, never the model, so an agent can't impersonate another.</dd>
+    <dt>type</dt><dd>The harness's routing category: request, reply, notify, handoff. Code branches on this.</dd>
+    <dt>performative</dt><dd>What the sender intends: asking, telling, proposing, refusing. Covered under speech acts below.</dd>
+    <dt>correlation_id / reply_to</dt><dd>On a reply, the <code>msg_id</code> it answers. On a request, where the reply should go.</dd>
+    <dt>topic</dt><dd>For publish/subscribe: the channel name instead of a receiver.</dd>
+    <dt>content</dt><dd>The payload. Give it a schema per message kind and validate it like any model output.</dd>
+    <dt>ttl_s / hop_count</dt><dd>Safety fields. A message older than its TTL is dropped. A message that has been forwarded too many times is dropped. These two fields stop stale messages and endless forwarding loops.</dd>
+  </dl>
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p>The model decides <em>what</em> to say. The harness decides everything else: the id, the sender, the timestamp, whether the receiver exists, whether the sender is allowed to reach it, and whether the content passes validation. A message is one more model proposal, and it gets checked like a tool call.</p>
+  </div>
+
+  <h2 id="topologies" data-short="Channel patterns">Four channel patterns</h2>
+  <p>Chapter 15 covered topologies: the shape of who talks to whom. Underneath every topology sits one or more of these four channel patterns.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 400" role="img" aria-label="Four panels. a, direct message: A sends to B by address. b, publish/subscribe: a publisher posts to a topic called findings, and three subscribers receive it without the publisher knowing them. c, blackboard: three knowledge sources post to, read from and claim work on a shared board. d, handoff: a triage agent transfers the conversation to a refunds agent and stops; it gets nothing back.">
+        <defs>
+          <marker id="f1703-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1703-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1703-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-amber" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-group" x="10" y="10" width="340" height="180" rx="8"/>
+        <rect class="n-group" x="370" y="10" width="340" height="180" rx="8"/>
+        <rect class="n-group" x="10" y="210" width="340" height="180" rx="8"/>
+        <rect class="n-group" x="370" y="210" width="340" height="180" rx="8"/>
+
+        <text class="t-caps t-muted" x="24" y="32">a · direct message</text>
+        <rect class="n-plain" x="40" y="80" width="80" height="34" rx="6"/><text class="t-b" x="80" y="102" text-anchor="middle">A</text>
+        <rect class="n-plain" x="240" y="80" width="80" height="34" rx="6"/><text class="t-b" x="280" y="102" text-anchor="middle">B</text>
+        <line x1="120" y1="97" x2="238" y2="97" marker-end="url(#f1703-ah)"/>
+        <text class="t-mono" x="179" y="89" text-anchor="middle">to: agent-B</text>
+        <text class="t-sm t-muted" x="24" y="152">sender must know the receiver's address</text>
+        <text class="t-sm t-muted" x="24" y="170">one sender → one receiver</text>
+
+        <text class="t-caps t-muted" x="384" y="32">b · publish / subscribe</text>
+        <rect class="n-plain" x="384" y="74" width="74" height="46" rx="6"/><text class="t-sm t-b" x="421" y="101" text-anchor="middle">Publisher</text>
+        <line x1="458" y1="97" x2="498" y2="97" marker-end="url(#f1703-ah)"/>
+        <text class="t-xs t-muted" x="478" y="89" text-anchor="middle">publish</text>
+        <rect class="n-amber" x="500" y="74" width="96" height="46" rx="6"/>
+        <text class="t-sm" x="548" y="92" text-anchor="middle">topic</text>
+        <text class="t-mono" x="548" y="110" text-anchor="middle">findings</text>
+        <rect class="n-plain" x="624" y="44" width="76" height="28" rx="5"/><text class="t-sm" x="662" y="62" text-anchor="middle">Sub 1</text>
+        <rect class="n-plain" x="624" y="84" width="76" height="28" rx="5"/><text class="t-sm" x="662" y="102" text-anchor="middle">Sub 2</text>
+        <rect class="n-plain" x="624" y="124" width="76" height="28" rx="5"/><text class="t-sm" x="662" y="142" text-anchor="middle">Sub 3</text>
+        <line class="e-amber" x1="596" y1="90" x2="622" y2="60" marker-end="url(#f1703-ahm)"/>
+        <line class="e-amber" x1="596" y1="98" x2="622" y2="98" marker-end="url(#f1703-ahm)"/>
+        <line class="e-amber" x1="596" y1="106" x2="622" y2="136" marker-end="url(#f1703-ahm)"/>
+        <text class="t-sm t-muted" x="384" y="176">publisher doesn't know who listens</text>
+
+        <text class="t-caps t-muted" x="24" y="232">c · blackboard</text>
+        <rect class="n-amber" x="124" y="262" width="112" height="52" rx="6"/>
+        <text class="t-b" x="180" y="284" text-anchor="middle">blackboard</text>
+        <text class="t-xs t-muted" x="180" y="302" text-anchor="middle">facts · claims</text>
+        <rect class="n-plain" x="20" y="276" width="64" height="26" rx="5"/><text class="t-sm" x="52" y="293" text-anchor="middle">K1</text>
+        <rect class="n-plain" x="276" y="276" width="64" height="26" rx="5"/><text class="t-sm" x="308" y="293" text-anchor="middle">K2</text>
+        <rect class="n-plain" x="148" y="344" width="64" height="26" rx="5"/><text class="t-sm" x="180" y="361" text-anchor="middle">K3</text>
+        <line x1="84" y1="289" x2="122" y2="289" marker-end="url(#f1703-ah)"/>
+        <text class="t-xs" x="103" y="281" text-anchor="middle">post</text>
+        <line x1="236" y1="289" x2="274" y2="289" marker-end="url(#f1703-ah)"/>
+        <text class="t-xs" x="255" y="281" text-anchor="middle">read</text>
+        <line x1="180" y1="342" x2="180" y2="316" marker-end="url(#f1703-ah)"/>
+        <text class="t-xs" x="188" y="333">claim</text>
+        <text class="t-sm t-muted" x="24" y="384">agents coordinate only through the board</text>
+
+        <text class="t-caps t-muted" x="384" y="232">d · handoff</text>
+        <rect class="n-sunken" x="394" y="266" width="96" height="40" rx="6"/>
+        <text class="t-b" x="442" y="283" text-anchor="middle">Triage</text>
+        <text class="t-xs t-muted" x="442" y="298" text-anchor="middle">stops here</text>
+        <rect class="n-accent" x="596" y="266" width="96" height="40" rx="6"/>
+        <text class="t-b" x="644" y="283" text-anchor="middle">Refunds</text>
+        <text class="t-xs t-accent" x="644" y="298" text-anchor="middle">takes over</text>
+        <line class="e-accent" x1="490" y1="286" x2="594" y2="286" marker-end="url(#f1703-aha)"/>
+        <text class="t-sm t-accent" x="542" y="279" text-anchor="middle">handoff</text>
+        <text class="t-mono" x="542" y="332" text-anchor="middle">transfer_to_refunds()</text>
+        <text class="t-sm t-muted" x="384" y="354">the whole conversation moves to the new agent</text>
+        <text class="t-sm t-red" x="384" y="374">Triage gets nothing back (unlike delegation)</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 17.3</b>Four ways to move information. Direct messages need addresses. Pub/sub decouples senders from receivers. A blackboard is shared state with structure. A handoff moves <em>control</em>, not just data.</figcaption>
+  </figure>
+
+  <h3>Publish/subscribe</h3>
+  <p>A publisher posts to a named <strong>topic</strong>. Anyone subscribed to the topic receives a copy. The publisher doesn't know, or care, who is listening. That decoupling is the point: you can add a new listener (a logger, a monitor, a summarizer) without changing any sender. <strong>Broadcast</strong> is the extreme case: one topic that every agent hears. Broadcast is the easiest way to multiply token cost, because one message lands in <em>n</em> contexts.</p>
+
+  <h3>The blackboard</h3>
+  <p>The blackboard architecture comes from the Hearsay-II speech-understanding system (Erman et al., 1980). Independent specialists, called <strong>knowledge sources</strong>, watch a shared, structured workspace. Each one adds a contribution when it can, building on what others posted. A <strong>control component</strong> decides which knowledge source gets to act next. For LLM agents, the blackboard is the natural home for three kinds of entries:</p>
+  <ul>
+    <li><strong>Facts</strong>: findings with their source and the agent that found them.</li>
+    <li><strong>Claims</strong>: “agent-5 is working on subtopic X”, with an expiry time, so others skip X. A claim that expires is called a <strong>lease</strong>: if agent-5 crashes, the claim lapses and someone else can take X.</li>
+    <li><strong>Open questions</strong>: things one agent needs and hopes another can answer.</li>
+  </ul>
+  <p>A blackboard is shared state, so it inherits shared state's bugs. The classic is <em>check-then-act</em>: agent A checks that X is unclaimed, awaits something, then claims X. Meanwhile B did the same check. Both claim X. In a single asyncio event loop the fix is simple: make the check and the write a single function with <strong>no <code>await</code> between them</strong>, so no other coroutine can run in the gap (Chapter 10).</p>
+
+  <h3>Handoffs vs delegation</h3>
+  <p>These two are easy to blur, and the difference decides who owns the result:</p>
+  <div class="cols-2">
+    <div class="card"><h4>Delegation (your Stage 5–6 tree)</h4><p>The parent spawns a child, waits, and gets a result back. The parent stays in charge and keeps its own context. Control returns to the caller, as with a function call.</p></div>
+    <div class="card"><h4>Handoff</h4><p>The current agent transfers the conversation to another agent and stops. The new agent talks to the user from then on. Nothing comes back. Control moves sideways, as with a <code>goto</code>. This is the core move in OpenAI's Swarm (Chapter 18).</p></div>
+  </div>
+
+  <h2 id="channels" data-short="Channel growth">How the number of channels grows</h2>
+  <p>Here is the arithmetic behind “don't let everyone talk to everyone”. If each of <em>n</em> agents can talk directly to every other, each pair is a potential two-way channel:</p>
+  <div class="formula">
+    full mesh: &nbsp;n(n−1)/2 channels<br>
+    star (everyone talks only to a hub): &nbsp;n−1 channels<br>
+    <span class="muted">n = 10: &nbsp;45 vs 9 &nbsp;· &nbsp;n = 20: &nbsp;190 vs 19 &nbsp;← double the agents, about four times the mesh</span>
+  </div>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Agents (n)</th><th>Full mesh n(n−1)/2</th><th>Star n−1</th><th>Mesh ÷ star</th></tr></thead>
+      <tbody>
+        <tr><td>3</td><td>3</td><td>2</td><td>1.5×</td></tr>
+        <tr><td>5</td><td>10</td><td>4</td><td>2.5×</td></tr>
+        <tr><td>10</td><td>45</td><td>9</td><td>5×</td></tr>
+        <tr><td>20</td><td>190</td><td>19</td><td>10×</td></tr>
+        <tr><td>50</td><td>1,225</td><td>49</td><td>25×</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>The ratio is exactly <em>n</em>/2, so the gap keeps widening. And a channel is more than a line on a diagram. Each one is a place where a message can be lost, duplicated, misread, or carry an injected instruction, and each one adds text to somebody's context. A tree gives you <em>n</em>−1 parent-child channels for free. Every sideways channel you add on top should be one you can name and justify.</p>
+  <div class="box note">
+    <span class="box-label">Same shape, different cause</span>
+    <p>This is the same <em>n</em>(<em>n</em>−1)/2 that appears in Chapter 01's token growth and in Brooks's law about adding people to a late software project. Pairwise communication grows quadratically whenever any member may talk to any other.</p>
+  </div>
+
+  <h2 id="coordination" data-short="Deadlock &amp; livelock">Coordination failures: deadlock, livelock, ordering, duplicates</h2>
+  <p>Once agents can wait on each other, they can wait on each other <em>in a circle</em>. This section covers the four classic coordination failures, each with the signal it leaves in a trace.</p>
+
+  <h3>Deadlock</h3>
+  <p>A <strong>deadlock</strong> is a set of agents in which each one is waiting for another one in the set. Nobody can move, so nobody ever will. Coffman, Elphick and Shoshani (1971) showed that a deadlock needs four conditions to hold at the same time. Break any one and deadlock becomes impossible.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 230" role="img" aria-label="Left: a wait-for cycle. Agent A waits for B, B waits for C, and C waits for A, so nobody can move. Right: Coffman's four deadlock conditions with a remedy for each. Mutual exclusion is usually unavoidable. Hold and wait: release slots before awaiting. No preemption: put a timeout on every await. Circular wait: only wait downward in the tree.">
+        <defs>
+          <marker id="f1704-ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-red" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-plain" x="122" y="32" width="96" height="36" rx="6"/><text class="t-b" x="170" y="55" text-anchor="middle">agent A</text>
+        <rect class="n-plain" x="222" y="172" width="96" height="36" rx="6"/><text class="t-b" x="270" y="195" text-anchor="middle">agent B</text>
+        <rect class="n-plain" x="22" y="172" width="96" height="36" rx="6"/><text class="t-b" x="70" y="195" text-anchor="middle">agent C</text>
+        <line class="e-red" x1="204" y1="70" x2="258" y2="170" marker-end="url(#f1704-ahr)"/>
+        <text class="t-sm t-red" x="240" y="116">waits for</text>
+        <line class="e-red" x1="220" y1="190" x2="120" y2="190" marker-end="url(#f1704-ahr)"/>
+        <text class="t-sm t-red" x="170" y="222" text-anchor="middle">waits for</text>
+        <line class="e-red" x1="80" y1="172" x2="136" y2="70" marker-end="url(#f1704-ahr)"/>
+        <text class="t-sm t-red" x="100" y="116" text-anchor="end">waits for</text>
+        <text class="t-sm t-b t-red" x="170" y="140" text-anchor="middle">nobody can move</text>
+
+        <text class="t-b" x="380" y="22">Coffman's four conditions: break any one</text>
+        <rect class="n-sunken" x="380" y="36" width="134" height="38" rx="5"/><text class="t-sm" x="447" y="59" text-anchor="middle">mutual exclusion</text>
+        <text class="t-sm" x="526" y="52">a slot or lock serves one agent</text>
+        <text class="t-xs t-muted" x="526" y="66">usually unavoidable</text>
+        <rect class="n-accent" x="380" y="84" width="134" height="38" rx="5"/><text class="t-sm" x="447" y="107" text-anchor="middle">hold and wait</text>
+        <text class="t-sm" x="526" y="100">release a slot before awaiting</text>
+        <text class="t-xs t-muted" x="526" y="114">see the semaphore bug below</text>
+        <rect class="n-accent" x="380" y="132" width="134" height="38" rx="5"/><text class="t-sm" x="447" y="155" text-anchor="middle">no preemption</text>
+        <text class="t-sm" x="526" y="148">a timeout on every await</text>
+        <text class="t-xs t-muted" x="526" y="162">a stuck wait becomes an error</text>
+        <rect class="n-accent" x="380" y="180" width="134" height="38" rx="5"/><text class="t-sm" x="447" y="203" text-anchor="middle">circular wait</text>
+        <text class="t-sm" x="526" y="196">only wait downward in the tree</text>
+        <text class="t-xs t-muted" x="526" y="210">parents await children, never back</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 17.4</b>A wait-for cycle and the four conditions behind it. A pure tree where agents only await their own children has no cycles. Sideways request/reply is what makes cycles possible again.</figcaption>
+  </figure>
+
+  <p>Agent harnesses rarely deadlock through messages alone. The more common version comes from a concurrency limit. Here is a bug that is easy to write in a recursive harness:</p>
+  <p class="code-label">A deadlock with no messages at all (pseudocode)</p>
+<pre><code>sem = asyncio.Semaphore(<span class="n">2</span>)            <span class="c"># "at most 2 agents running at once"</span>
+
+<span class="k">async def</span> run_agent(task):
+    <span class="hl"><span class="k">async with</span> sem:</span>                     <span class="c"># holds a slot...</span>
+        children = <span class="k">await</span> plan(task)
+        <span class="k">await</span> asyncio.gather(*(run_agent(c) <span class="k">for</span> c <span class="k">in</span> children))
+        <span class="c"># ...while waiting for children that each need a slot</span></code></pre>
+  <p>Walk it through. The root takes slot 1. It spawns three children. Child 1 takes slot 2. Children 2 and 3 wait for a slot. Child 1 plans and spawns grandchildren, which also wait for a slot. Now the root holds a slot while it waits for its children, and child 1 holds a slot while it waits for its children. No slot will ever free up. The program doesn't crash, use CPU or print anything. It just stops. That is the <em>hold-and-wait</em> condition in Figure 17.4. Ask yourself which part of an agent's life actually needs to be limited: the whole lifetime, or only the model calls and tool runs?</p>
+
+  <div class="box pitfall">
+    <span class="box-label">Pitfall</span>
+    <p>A deadlocked asyncio program is silent. With no timeouts, the only symptom is a trace that stops growing while tasks are still pending. Add a watchdog: if no event has been recorded for <em>T</em> seconds and tasks are still alive, dump every pending task with <code>asyncio.all_tasks()</code> and fail the run.</p>
+  </div>
+
+  <h3>Livelock</h3>
+  <p>In a <strong>livelock</strong>, everyone is busy and nothing progresses. With LLM agents, livelock often looks like politeness:</p>
+  <div class="trace">
+    <div class="trace-title">Trace · two siblings with peer messaging</div>
+    <div class="tr tr-sys"><span class="tr-role">harness</span><div class="tr-body">agent-2 and agent-3 have overlapping scope: pricing + features. Peer messages on.</div></div>
+    <div class="tr tr-act"><span class="tr-role">agent-2</span><div class="tr-body">→ agent-3: You take pricing, I'll take features.</div></div>
+    <div class="tr tr-obs"><span class="tr-role">agent-3</span><div class="tr-body">→ agent-2: You found the pricing page first, so you should take pricing. I'll do features.</div></div>
+    <div class="tr tr-act"><span class="tr-role">agent-2</span><div class="tr-body">→ agent-3: Good point, but you have more context on pricing. Let's swap: I do features, you do pricing.</div></div>
+    <div class="tr tr-obs"><span class="tr-role">agent-3</span><div class="tr-body">→ agent-2: Happy to adapt! You do pricing, I'll do features.</div></div>
+    <div class="tr tr-sys"><span class="tr-role">harness</span><div class="tr-body">8 messages · 0 tool calls · 0 findings · 11% of budget used. Nobody is blocked. Nothing is done.</div></div>
+  </div>
+  <p>Compare the two signals. <strong>Deadlock</strong>: the event count stops rising. <strong>Livelock</strong>: the event count rises, but the progress count (tool calls that return new information, findings, completed subtasks) stays flat. You can only detect livelock if you count progress separately from activity. The fixes are the same as for any symmetric conflict: a deterministic tie-break (“lower id wins”), randomized backoff (Chapter 11), a cap on messages per pair, or, best of all, a parent that assigns disjoint scopes so the negotiation never starts.</p>
+
+  <h3>Ordering</h3>
+  <p>One <code>asyncio.Queue</code> is first-in, first-out. But a receiver with several senders has no guarantee about the <em>relative</em> order of their messages. B can receive A's message after C's, even if A sent first. Across processes it gets worse, because messages can be delayed or reordered on the way. If order matters, give each sender a sequence number. When you need causal order across many agents, look up Lamport clocks (Lamport, 1978). Also expect replies to arrive late, after the requester has timed out and moved on. The <code>on_reply</code> code above drops those on purpose.</p>
+
+  <h3>Duplicate work</h3>
+  <p>The most common coordination failure in research swarms isn't dramatic at all. Two siblings get overlapping tasks, both search the same sources, and both return the same facts. You pay twice, and the aggregator has to merge near-duplicates. Anthropic's write-up of its multi-agent research system names exactly this: early versions had subagents duplicating each other's searches until the lead agent's task descriptions became more specific. There are three places to prevent it:</p>
+  <ul>
+    <li><strong>At decomposition</strong> (best): the parent writes disjoint subtasks with explicit boundaries (“cover 2020–2023 only; another agent covers 2024”).</li>
+    <li><strong>During the run</strong>: claims with leases on a blackboard, so a sibling can see that a source or subtopic is taken.</li>
+    <li><strong>At aggregation</strong> (last resort): deduplicate findings by source URL or content hash before synthesis.</li>
+  </ul>
+
+  <h2 id="consensus" data-short="Consensus &amp; voting">Consensus and voting</h2>
+  <p>Sometimes the question isn't who does what, but <em>what is true</em>. Several agents answer, and the system has to settle on one answer. The common methods:</p>
+  <dl class="defs">
+    <dt>Majority vote</dt><dd>Run <em>k</em> agents (or one agent <em>k</em> times) and take the most common answer. This is self-consistency (Chapter 05) spread across agents. It only works when answers can be compared, such as a number, a label or a choice.</dd>
+    <dt>Judge</dt><dd>A separate agent reads all answers and picks or merges. It carries every LLM-as-judge bias from Chapter 13: position, length, self-preference.</dd>
+    <dt>Debate</dt><dd>Agents see each other's answers and revise over several rounds. Chapter 18 covers what the evidence says.</dd>
+  </dl>
+  <p>Voting is powerful only when the voters' errors are independent. Work it through with three voters that are each right 80% of the time:</p>
+  <div class="formula">
+    independent errors: &nbsp;P(majority right) = p³ + 3p²(1−p) = 0.512 + 0.384 = 0.896<br>
+    perfectly correlated errors: &nbsp;P(majority right) = p = 0.80<br>
+    <span class="muted">same model, same prompt, same context → errors are strongly correlated → closer to the second line</span>
+  </div>
+  <p>Three copies of one model reading the same misleading source tend to make the <em>same</em> mistake. So a vote among them mostly measures how confident the model is, not whether it's right. To get closer to independence, vary something that matters: different sources, different decompositions, different prompts, or different models.</p>
+  <div class="box pitfall">
+    <span class="box-label">Two meanings of “consensus”</span>
+    <p>In distributed systems, consensus algorithms such as Paxos and Raft make replicas <em>agree on one value</em> despite crashes and lost messages. They guarantee agreement, not correctness: all replicas can agree on a wrong value. The Byzantine generals problem (Lamport, Shostak and Pease, 1982) adds participants that lie, and shows you need more than three times as many participants as liars. When people say LLM agents “reach consensus”, they mean something much weaker: opinions are aggregated. Don't let the word borrow the guarantees.</p>
+  </div>
+
+  <h2 id="speech-acts">Speech acts: typing the intent of a message</h2>
+  <p>Philosophers noticed long before computers that saying something is often <em>doing</em> something. “I promise”, “I request”, “I refuse” are actions, not descriptions (J. L. Austin, 1962; John Searle, 1969). <strong>Speech act theory</strong> separates a message's <em>content</em> (what it is about) from its <em>force</em> (what the speaker is doing with it).</p>
+  <p>Multi-agent systems research of the 1990s turned this into protocols. <strong>KQML</strong> (Finin et al., 1994) and then <strong>FIPA ACL</strong> (standardized around 2000–2002) gave every message a <strong>performative</strong>: a word from a fixed list, about twenty in FIPA's case, naming the act. Neither saw wide industrial use. They came with formal semantics about agents' beliefs and intentions that real programs couldn't check, and they assumed shared ontologies that were expensive to build.</p>
+  <p>LLMs remove the ontology problem, because the content can be plain language. The performative is still worth keeping, because it lets <em>code</em> route a message without having a model read it first:</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>FIPA performative</th><th>The speaker is…</th><th>What your harness can do with it</th></tr></thead>
+      <tbody>
+        <tr><td><code>inform</code></td><td>stating something it believes is true</td><td>store as a finding, with sender and source</td></tr>
+        <tr><td><code>request</code></td><td>asking the receiver to perform an action</td><td>treat as a task: check permission and budget first</td></tr>
+        <tr><td><code>query-ref</code></td><td>asking for a value</td><td>open a request/reply with a timeout</td></tr>
+        <tr><td><code>agree</code> / <code>refuse</code></td><td>accepting or declining a request</td><td>a refusal is an explicit answer, not a silence to time out on</td></tr>
+        <tr><td><code>failure</code></td><td>reporting that an attempted action failed</td><td>an error returned as data (Chapter 11)</td></tr>
+        <tr><td><code>not-understood</code></td><td>saying the last message made no sense</td><td>a validation error to return to the sender</td></tr>
+        <tr><td><code>cfp</code>, <code>propose</code>, <code>accept-proposal</code>, <code>reject-proposal</code></td><td>negotiating who does a task</td><td>the contract net protocol, next section</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p>Free text is fine for <em>content</em>. Intent should be an enum. “Did B refuse, fail, or just not answer yet?” is a question your harness must be able to answer without calling a model.</p>
+  </div>
+
+  <h2 id="contract-net" data-short="Contract net">The contract net protocol</h2>
+  <p>Reid Smith's contract net protocol (1980) is the classic way to allocate tasks by negotiation instead of assignment. It has four steps, and you'll recognize your own recursive tree inside it: any contractor can become a manager for subtasks of its own.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 320" role="img" aria-label="Contract net sequence. The manager broadcasts a call for proposals to contractors C1, C2 and C3. C1 proposes cost 3 and 2 minutes, C2 refuses because it is busy, and C3 proposes cost 5 and 4 minutes. After bids close, the manager accepts C1's proposal and rejects C3's. C1 does the work and informs the manager of the result.">
+        <defs>
+          <marker id="f1705-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1705-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1705-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-violet" x="40" y="14" width="100" height="28" rx="5"/><text class="t-b" x="90" y="33" text-anchor="middle">Manager</text>
+        <rect class="n-plain" x="250" y="14" width="100" height="28" rx="5"/><text class="t-b" x="300" y="33" text-anchor="middle">C1</text>
+        <rect class="n-plain" x="410" y="14" width="100" height="28" rx="5"/><text class="t-b" x="460" y="33" text-anchor="middle">C2</text>
+        <rect class="n-plain" x="570" y="14" width="100" height="28" rx="5"/><text class="t-b" x="620" y="33" text-anchor="middle">C3</text>
+        <line class="e-line e-dash" x1="90" y1="42" x2="90" y2="310"/>
+        <line class="e-line e-dash" x1="300" y1="42" x2="300" y2="310"/>
+        <line class="e-line e-dash" x1="460" y1="42" x2="460" y2="310"/>
+        <line class="e-line e-dash" x1="620" y1="42" x2="620" y2="310"/>
+
+        <line x1="90" y1="72" x2="616" y2="72" marker-end="url(#f1705-ah)"/>
+        <circle class="fill-fg" cx="300" cy="72" r="3.5"/>
+        <circle class="fill-fg" cx="460" cy="72" r="3.5"/>
+        <text class="t-sm" x="195" y="65" text-anchor="middle">1 · cfp: task, deadline (broadcast)</text>
+
+        <line x1="300" y1="120" x2="94" y2="120" marker-end="url(#f1705-ah)"/>
+        <text class="t-sm" x="195" y="113" text-anchor="middle">2 · propose: cost 3, 2 min</text>
+        <line class="e-muted" x1="460" y1="150" x2="94" y2="150" marker-end="url(#f1705-ahm)"/>
+        <text class="t-sm t-muted" x="380" y="143" text-anchor="middle">refuse: busy</text>
+        <line x1="620" y1="180" x2="94" y2="180" marker-end="url(#f1705-ah)"/>
+        <text class="t-sm" x="540" y="173" text-anchor="middle">propose: cost 5, 4 min</text>
+
+        <rect class="n-amber" x="50" y="190" width="80" height="18" rx="3"/>
+        <text class="t-xs t-amber" x="90" y="203" text-anchor="middle">bids close</text>
+
+        <line class="e-accent" x1="90" y1="226" x2="292" y2="226" marker-end="url(#f1705-aha)"/>
+        <text class="t-sm t-accent" x="195" y="219" text-anchor="middle">3 · accept-proposal</text>
+        <line class="e-muted" x1="90" y1="248" x2="616" y2="248" marker-end="url(#f1705-ahm)"/>
+        <text class="t-sm t-muted" x="540" y="241" text-anchor="middle">reject-proposal</text>
+        <rect class="n-accent" x="294" y="230" width="12" height="56" rx="2"/>
+        <text class="t-sm t-accent" x="314" y="272">C1 does the task</text>
+
+        <line class="e-accent" x1="294" y1="296" x2="94" y2="296" marker-end="url(#f1705-aha)"/>
+        <text class="t-sm t-accent" x="195" y="289" text-anchor="middle">4 · inform: result</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 17.5</b>Contract net in four steps: announce, bid, award, report. The manager doesn't need to know in advance who is capable or free. Bidding finds out. Notice that C2 answers with an explicit <code>refuse</code> instead of staying silent.</figcaption>
+  </figure>
+
+  <p>Contract net is elegant, and it maps onto LLM agents with one serious catch: <strong>a bid is a self-report</strong>. If an LLM agent bids “I can do this well in 2 minutes”, that number is generated text. Models tend to be overconfident about their own abilities, and every agent will happily say it's a good fit. A market where every bidder is optimistic just picks whoever is most optimistic.</p>
+  <p>The fix is to bid on things the <em>harness</em> can measure: which tools an agent actually has, how much budget it has left, its current queue length, whether it already holds relevant context or cached sources, and its past success rate on similar tasks from your evaluation logs. Let the model write the proposal text. Let code compute the score.</p>
+
+  <h2 id="protocols" data-short="MCP vs A2A">Standard protocols: MCP and A2A</h2>
+  <p>Two open protocols now cover the two directions an agent can connect. They are often mentioned together, and they solve different problems.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 292" role="img" aria-label="Left: inside your process, your agent connects through two MCP clients to two MCP servers, GitHub and internal docs, over JSON-RPC. Servers expose tools, resources and prompts. Right: a remote agent in another service, with its internals hidden, describes itself with an agent card listing skills, endpoint and auth. Your agent first discovers the agent card, then sends it a task over A2A and receives status and artifacts back.">
+        <defs>
+          <marker id="f1706-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1706-ahv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-violet" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1706-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-group" x="16" y="16" width="300" height="178" rx="8"/>
+        <text class="t-caps t-muted" x="28" y="34">your process (host)</text>
+        <rect class="n-accent" x="170" y="46" width="130" height="44" rx="6"/>
+        <text class="t-b" x="235" y="66" text-anchor="middle">Your agent</text>
+        <text class="t-xs t-muted" x="235" y="82" text-anchor="middle">LLM + loop</text>
+        <rect class="n-plain" x="30" y="130" width="110" height="32" rx="5"/><text class="t-sm" x="85" y="150" text-anchor="middle">MCP client</text>
+        <rect class="n-plain" x="166" y="130" width="110" height="32" rx="5"/><text class="t-sm" x="221" y="150" text-anchor="middle">MCP client</text>
+        <line class="e-muted" x1="200" y1="90" x2="104" y2="128" marker-end="url(#f1706-ahm)"/>
+        <line class="e-muted" x1="226" y1="90" x2="222" y2="128" marker-end="url(#f1706-ahm)"/>
+        <rect class="n-sunken" x="30" y="220" width="110" height="40" rx="5"/>
+        <text class="t-b" x="85" y="238" text-anchor="middle">GitHub</text>
+        <text class="t-xs t-muted" x="85" y="252" text-anchor="middle">MCP server</text>
+        <rect class="n-sunken" x="166" y="220" width="110" height="40" rx="5"/>
+        <text class="t-b" x="221" y="238" text-anchor="middle">internal docs</text>
+        <text class="t-xs t-muted" x="221" y="252" text-anchor="middle">MCP server</text>
+        <line x1="85" y1="164" x2="85" y2="218" marker-start="url(#f1706-ah)" marker-end="url(#f1706-ah)"/>
+        <text class="t-xs" x="91" y="200">JSON-RPC</text>
+        <line x1="221" y1="164" x2="221" y2="218" marker-start="url(#f1706-ah)" marker-end="url(#f1706-ah)"/>
+        <text class="t-xs" x="227" y="200">JSON-RPC</text>
+        <text class="t-sm t-muted" x="30" y="282">MCP server exposes tools · resources · prompts</text>
+
+        <rect class="n-group" x="420" y="16" width="284" height="178" rx="8"/>
+        <text class="t-caps t-muted" x="432" y="34">another service or org</text>
+        <rect class="n-violet" x="460" y="46" width="200" height="44" rx="6"/>
+        <text class="t-b" x="560" y="66" text-anchor="middle">Remote agent</text>
+        <text class="t-xs t-muted" x="560" y="82" text-anchor="middle">internals hidden</text>
+        <rect class="n-plain" x="460" y="130" width="200" height="32" rx="5"/>
+        <text class="t-xs" x="560" y="150" text-anchor="middle">agent card: skills · endpoint · auth</text>
+        <text class="t-xs t-muted" x="560" y="182" text-anchor="middle">exchanges tasks, messages, artifacts</text>
+
+        <line class="e-violet" x1="300" y1="58" x2="456" y2="58" marker-end="url(#f1706-ahv)"/>
+        <text class="t-sm t-b t-violet" x="379" y="51" text-anchor="middle">2 · A2A task</text>
+        <line class="e-violet" x1="458" y1="78" x2="304" y2="78" marker-end="url(#f1706-ahv)"/>
+        <text class="t-xs t-violet" x="379" y="92" text-anchor="middle">status · artifacts</text>
+        <line class="e-muted e-dash" x1="290" y1="90" x2="456" y2="144" marker-end="url(#f1706-ahm)"/>
+        <text class="t-xs t-muted" x="404" y="144" text-anchor="end">1 · discover</text>
+
+        <line class="e-thick" x1="420" y1="220" x2="434" y2="220"/>
+        <text class="t-sm" x="440" y="224">MCP: agent ↔ its tools and data</text>
+        <line class="e-violet e-thick" x1="420" y1="244" x2="434" y2="244"/>
+        <text class="t-sm" x="440" y="248">A2A: agent ↔ an opaque agent</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 17.6</b>MCP connects an agent <em>down</em> to tools and data. A2A connects an agent <em>across</em> to another agent whose internals it can't see. Your harness can use both, either, or (for an in-process swarm) neither.</figcaption>
+  </figure>
+
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th></th><th>MCP (Model Context Protocol)</th><th>A2A (Agent2Agent)</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Origin</strong></td><td>Open-sourced by Anthropic, November 2024</td><td>Announced by Google in April 2025, later moved to the Linux Foundation</td></tr>
+        <tr><td><strong>Connects</strong></td><td>An application (host) to tool and data servers</td><td>One agent to another agent, often in another organization</td></tr>
+        <tr><td><strong>Core concepts</strong></td><td>Servers offer <em>tools</em> (actions), <em>resources</em> (readable data) and <em>prompts</em> (templates). Servers can also ask the client for things, such as a model completion.</td><td><em>Agent cards</em> (what an agent offers and how to reach it), <em>tasks</em> with a lifecycle of states, <em>messages</em>, and output <em>artifacts</em></td></tr>
+        <tr><td><strong>Wire format</strong></td><td>JSON-RPC 2.0 over stdio (local) or HTTP</td><td>JSON-RPC 2.0 over HTTP, with streaming for long tasks</td></tr>
+        <tr><td><strong>Visibility</strong></td><td>The host sees every tool's schema and result</td><td>The remote agent is opaque. You see its card and its outputs, not its tools or memory.</td></tr>
+        <tr><td><strong>Fits your tree as</strong></td><td>A way to plug existing tool servers into your tool registry</td><td>A way for a child to be an agent you don't run yourself</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Both specs are evolving quickly. Check the current version before relying on any detail beyond this table.</p>
+  <div class="box note">
+    <span class="box-label">Do you need either one?</span>
+    <p>For agents inside one Python process, no. Your message bus is a dict of queues, and a protocol would add serialization and network failure modes you don't have yet. The protocols matter at <em>boundaries</em>: when tools live in another process or team (MCP), or when an agent belongs to another organization (A2A). The concepts are worth stealing either way: typed tasks with explicit states, self-descriptions that can be discovered, and outputs as named artifacts.</p>
+  </div>
+
+  <div class="box pitfall">
+    <span class="box-label">Misconceptions to drop</span>
+    <ul>
+      <li>“More communication means better coordination.” Each channel adds latency, tokens and failure modes. Most good multi-agent systems talk very little.</li>
+      <li>“The agents will sort out who does what.” Without a tie-break or an assigner, they negotiate politely forever (livelock) or both do it (duplicates).</li>
+      <li>“A hang means something crashed.” In asyncio a hang usually means a wait with no timeout, often in a cycle.</li>
+      <li>“Three agents agreeing means it's right.” Agreement among copies of one model mostly measures shared bias.</li>
+      <li>“We need A2A to build a swarm.” Only across process or organization boundaries. In one process, a dict of queues is enough.</li>
+    </ul>
+  </div>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Stage 7, the gate.</strong> Write the one-sentence justification from the top of this chapter before any code. Then decide: does your need look more like a blackboard (facts and claims) or like direct messages (questions and answers)? What would the trace of your demo look like under each?</li>
+      <li><strong>Stage 7, the message type.</strong> Go through the schema fields above. Which ones does your harness set, and which, if any, does the model get to set? What stops agent-4 from writing <code>"from": "root"</code>?</li>
+      <li><strong>Stage 2 and 7, tracing.</strong> Is a sent message one trace event or two (sent, delivered)? What do you need to be able to tell, afterwards, that a message was delivered but never read?</li>
+      <li><strong>Stage 5–6, concurrency.</strong> Look at the semaphore example. Does your concurrency limit cover an agent's whole life, or only its model and tool calls? Write a test with a limit of 2 and a tree of depth 2 that must either finish or fail within a few seconds. What does it show?</li>
+      <li><strong>Budgets.</strong> When agent-3 sends a message that agent-5 then reads on five later calls, whose budget pays for those tokens? Is your answer something your code can actually enforce?</li>
+    </ul>
+  </div>
+
+  <h2 id="check">Check yourself</h2>
+  <p>Answer each one out loud or on paper before you open it.</p>
+  <div class="quiz">
+    <details>
+      <summary><span class="tag recall">Recall</span> Name a typical bug of shared state and a typical bug of message passing. What does each look like in a trace?</summary>
+      <div><p>Shared state: a lost update or a check-then-act race. Two agents write the same key and one write vanishes, or both claim the same subtask. In a trace you see two writes or claims for the same key close together, and the earlier one has no effect. Message passing: a deadlock, a lost message, or an unbounded inbox. In a trace you see a request with no matching reply (or a timeout), or an inbox length that keeps growing.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag recall">Recall</span> What is a correlation id for? In the request/reply code above, what happens to a reply that arrives after the timeout?</summary>
+      <div><p>It ties a reply to the request it answers, so a sender with several requests in flight can resolve the right future. After a timeout, the <code>finally</code> clause has already removed the pending entry, so <code>on_reply</code> finds nothing and drops the late reply. That is deliberate: the requester has moved on, and resolving a stale future would be a bug.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> Twelve agents. How many channels in a full mesh, and how many in a star? What is the ratio?</summary>
+      <div><p>Mesh: 12·11/2 = 66. Star: 11. The ratio is 6, which is <em>n</em>/2. Doubling to 24 agents gives 276 vs 23, a ratio of 12.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> For five minutes, your trace's event count keeps rising, but no new findings or completed subtasks appear. Deadlock or livelock? What do you check next?</summary>
+      <div><p>Livelock. A deadlock would show the event count stopping. Next, group the recent events by type and by agent pair. A cluster of messages between the same two agents with no tool calls points to a negotiation loop. A single agent repeating the same tool call points to a single-agent loop (Chapter 11). The fix is a tie-break, a per-pair message cap, or reassigning scopes from the parent.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> Explain why the semaphore example deadlocks, using Coffman's conditions. Give two different fixes.</summary>
+      <div><p>Each agent holds a slot (mutual exclusion) while waiting for children that need slots (hold and wait). Nothing can take a slot back (no preemption), and parents wait on children that wait on the parents' slots to free up (a circular dependency through the shared pool). Fixes: acquire the semaphore only around model and tool calls, not around the whole agent lifetime, which breaks hold-and-wait. Or add a timeout to slot acquisition and fail the spawn, which breaks no-preemption. Separate limits per depth also work.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> You implement contract net, and LLM agents bid with a self-rated fit score from 1 to 10. What goes wrong, and how would you redesign the bid?</summary>
+      <div><p>Self-ratings are generated text. They're overconfident and similar across agents, so the auction picks whoever writes the most confident number. Redesign the bid so that code computes the score from measurable facts: the tools the agent actually has, its remaining budget, its queue length, whether it already holds relevant context, and its past success rate on similar tasks. The model can still write a short plan as part of the proposal, but the plan doesn't set the score.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “What's the difference between MCP and A2A, and would you use them inside a swarm harness?”</summary>
+      <div><p>MCP connects an agent to tools and data. Servers expose tools, resources and prompts over JSON-RPC, and the host sees every schema and result. A2A connects an agent to another agent it treats as opaque: discovery through an agent card, then tasks with states, messages and artifacts. Inside one process I'd use neither for internal messaging. A plain bus is simpler and has fewer failure modes. I'd use MCP to plug external tool servers into the tool registry, and A2A only if a child had to be an agent owned by another team or organization.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “Our orchestrator-worker system works. Product wants workers to message each other directly. How do you respond?”</summary>
+      <div><p>Start with the need: which information has to move between workers <em>during</em> their runs, and why the orchestrator re-planning between waves isn't enough. Check the cheaper options first: better decomposition, or a shared findings store. If peer messaging is still justified, scope it narrowly: specific message types, a cap per pair, timeouts on every wait, harness-set sender ids, peer messages treated as untrusted input, and trace events for send, deliver and read. Then measure against the current system on cost, latency and quality. Expect the number of possible channels to grow from <em>n</em>−1 to <em>n</em>(<em>n</em>−1)/2.</p></div>
+    </details>
+  </div>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><strong>Carl Hewitt, Peter Bishop and Richard Steiger, “A Universal Modular ACTOR Formalism for Artificial Intelligence”</strong> (IJCAI, 1973).<span class="why">The origin of the actor model: share nothing, communicate only by messages.</span></li>
+    <li><strong>Reid G. Smith, “The Contract Net Protocol: High-Level Communication and Control in a Distributed Problem Solver”</strong> (IEEE Transactions on Computers, 1980).<span class="why">Task allocation by announce, bid, award, report.</span></li>
+    <li><strong>Lee Erman, Frederick Hayes-Roth, Victor Lesser and Raj Reddy, “The Hearsay-II Speech-Understanding System: Integrating Knowledge to Resolve Uncertainty”</strong> (ACM Computing Surveys, 1980).<span class="why">The classic blackboard architecture: knowledge sources, a shared board, and a control component.</span></li>
+    <li><strong>E. G. Coffman, M. Elphick and A. Shoshani, “System Deadlocks”</strong> (ACM Computing Surveys, 1971).<span class="why">The four conditions for deadlock in Figure 17.4.</span></li>
+    <li><strong>Leslie Lamport, “Time, Clocks, and the Ordering of Events in a Distributed System”</strong> (Communications of the ACM, 1978).<span class="why">Why “which message came first” is a hard question, and logical clocks as the answer.</span></li>
+    <li><strong>Leslie Lamport, Robert Shostak and Marshall Pease, “The Byzantine Generals Problem”</strong> (ACM TOPLAS, 1982).<span class="why">Agreement when some participants lie. A useful frame for a swarm in which one agent has been prompt-injected.</span></li>
+    <li><strong>Tim Finin, Richard Fritzson, Don McKay and Robin McEntire, “KQML as an Agent Communication Language”</strong> (CIKM, 1994).<span class="why">Performatives in practice, a generation before LLMs.</span></li>
+    <li><strong>FIPA, “ACL Message Structure Specification” and “Communicative Act Library Specification”</strong> (2002).<span class="why">The standard list of performatives behind the table in the speech acts section.</span></li>
+    <li><strong>Michael Wooldridge, “An Introduction to MultiAgent Systems”</strong> (2nd ed., Wiley, 2009).<span class="why">The textbook for classical multi-agent systems: communication, negotiation, voting.</span></li>
+    <li><strong>The Model Context Protocol specification</strong> (Anthropic and contributors, 2024 onward) and <strong>the Agent2Agent (A2A) protocol specification</strong> (Google and contributors, 2025 onward).<span class="why">Check the current versions. Both change often.</span></li>
+    <li><strong>Anthropic, “How we built our multi-agent research system”</strong> (engineering blog, 2025).<span class="why">A real orchestrator-worker system, including the duplicate-work problem and how task descriptions fixed it.</span></li>
+    <li><strong>Python documentation, asyncio “Queues” and “Synchronization Primitives”.</strong><span class="why">The exact behavior of <code>Queue</code>, <code>Semaphore</code> and <code>wait_for</code> used in this chapter.</span></li>
+  </ul>
+
+  <section class="recall-card" aria-labelledby="recall-17">
+    <h2 id="recall-17" data-short="Recall card">Recall card</h2>
+    <p class="muted small">Five lines to rehearse. If you can expand each into a minute of explanation, you know this chapter.</p>
+    <ol>
+      <li>Add sideways communication only when information is needed during a sibling's run. Re-planning, a shared store or better decomposition is usually cheaper.</li>
+      <li>Shared state fails by lost updates and races. Message passing fails by deadlock, lost or duplicated messages and unbounded inboxes.</li>
+      <li>Request/reply needs a correlation id, a future and a timeout. Without the timeout, a missing reply is a silent hang.</li>
+      <li>Deadlock means no events. Livelock means events without progress. Count progress separately from activity.</li>
+      <li>A mesh has <em>n</em>(<em>n</em>−1)/2 channels and a star has <em>n</em>−1. Votes among copies of one model share their errors. MCP goes down to tools; A2A goes across to opaque agents.</li>
+    </ol>
+  </section>
+
+  <div class="done">
+    <input type="checkbox" id="done-toggle" data-chapter="17">
+    <label for="done-toggle">I can explain this chapter without notes<small>Saved in this browser only. It updates the count on the guide's home page.</small></label>
+  </div>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="16-spawning-and-delegation.html"><small>Back to · Chapter 16</small>Spawning and recursive delegation</a>
+    <a class="next" href="18-swarm-intelligence.html"><small>Next · Chapter 18</small>Swarm intelligence: from ants to LLMs</a>
+  </nav>
+</main>
+<aside class="toc-rail" aria-label="On this page"><p class="toc-title">In this chapter</p><nav data-toc></nav></aside>
+</div>
+</body>
+</html>

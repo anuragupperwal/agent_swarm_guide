@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Framework Landscape · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="../index.html">Loop <span>→</span> Swarm</a>
+    <div class="crumbs"><a href="../index.html">Guide</a> · Part 5 · Putting it together · Chapter 21</div>
+    <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+  </div>
+</header>
+
+<div class="page has-toc">
+<main class="chapter">
+
+  <header class="ch-head">
+    <p class="eyebrow"><b>Part 5 · Putting it together</b> · Chapter 21 · Level L5</p>
+    <h1>The framework landscape</h1>
+    <p class="lede">You now know the concepts well enough to read a framework the way an engineer should: as a bundle of opinions about the loop, tools, state, control flow and delegation. This chapter maps seven frameworks and two protocols onto the concepts you already have, and shows you how to judge the next one that appears.</p>
+    <ul class="ch-meta">
+      <li><b>45 min</b> reading</li>
+      <li>Builds on: <b>Ch 03, 04, 08, 09, 15</b></li>
+      <li>Your project: <b>Stage 9</b></li>
+    </ul>
+    <ol class="where" aria-label="Where this chapter sits in the guide">
+      <li class="past"><span>Part 1</span>Foundations</li>
+      <li class="past"><span>Part 2</span>Thinking &amp; memory</li>
+      <li class="past"><span>Part 3</span>The harness</li>
+      <li class="past"><span>Part 4</span>Multi-agent</li>
+      <li class="here"><span>Part 5</span>Together</li>
+    </ol>
+  </header>
+
+  <details class="toc-mobile"><summary>In this chapter</summary><div data-toc></div></details>
+
+  <div class="box note">
+    <span class="box-label">This chapter ages fastest</span>
+    <p>Frameworks change monthly: names, APIs and even ownership. Everything here describes each framework's <em>core idea</em> as of late 2025, which changes slowly. Before you rely on a specific class, parameter or feature, check the framework's current documentation. The concepts in the left column of every table will still be right after the APIs change.</p>
+  </div>
+
+  <div class="box predict">
+    <span class="box-label">Predict first · 10 min</span>
+    <p>Write answers in <code>docs/LEARNING_NOTES.md</code> under “Guide ch21”. Tag each one <em>sure</em> or <em>guess</em>.</p>
+    <ol>
+      <li>Pick one framework you've heard of. Which boxes from Figure 20.2 do you think it gives you, and which would you still write yourself?</li>
+      <li>Agent A hands a conversation to agent B (a <em>handoff</em>). Agent A calls agent B as a tool. In each case, who has control after B finishes?</li>
+      <li>In one sentence each: what is MCP for, and what is it <em>not</em> for?</li>
+    </ol>
+  </div>
+
+  <h2 id="big-idea">The big idea</h2>
+  <p>Every framework in this chapter implements the same few things you've studied: a loop that calls a model (Chapter 03), tools (Chapter 04), some state (Chapter 09), some way to decide the next step (Chapter 09), and usually some way for agents to delegate (Chapters 15–16). They differ in which of these they make <em>explicit</em> and which they <em>hide</em>.</p>
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>A framework is a harness with opinions.</strong> Read any framework by asking three questions: <em>Who decides the next step</em>: your code, or the model? <em>How much harness comes included</em>: a thin loop, or tools, permissions and context management too? And <em>what does it hide</em>: which prompts, retries and state changes happen where you can't see them?</p>
+  </div>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 900 420" role="img" aria-label="Seven frameworks placed on two axes. Horizontal: who decides the next step, from your code on the left to the model on the right. Vertical: how much harness comes included, from a thin library at the bottom to a full harness at the top. LangGraph sits left of centre, explicit. CrewAI and AutoGen sit in the middle. The OpenAI Agents SDK, Strands Agents and smolagents sit right and low: model-driven, thin. The Claude Agent SDK sits right and high: model-driven with a full harness.">
+        <defs>
+          <marker id="f2101-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <line class="e-muted" x1="110" y1="360" x2="870" y2="360" marker-start="url(#f2101-ah)" marker-end="url(#f2101-ah)"/>
+        <line class="e-muted" x1="90" y1="40" x2="90" y2="340" marker-start="url(#f2101-ah)" marker-end="url(#f2101-ah)"/>
+        <line class="e-line e-dash" x1="490" y1="44" x2="490" y2="350"/>
+        <line class="e-line e-dash" x1="100" y1="200" x2="870" y2="200"/>
+        <text class="t-sm" x="110" y="382">your code owns the flow</text>
+        <text class="t-sm" x="870" y="382" text-anchor="end">the model owns the flow</text>
+        <text class="t-caps t-muted" x="490" y="406" text-anchor="middle">who decides the next step</text>
+        <text class="t-caps t-muted" transform="translate(40,190) rotate(-90)" text-anchor="middle">how much harness you get</text>
+        <text class="t-sm t-muted" x="104" y="54">full harness: tools, permissions, context handling</text>
+        <text class="t-sm t-muted" x="104" y="334">thin library: a loop and some types</text>
+
+        <circle class="n-accent" cx="210" cy="200" r="7"/>
+        <text class="t-b" x="224" y="190">LangGraph</text>
+        <text class="t-xs t-muted" x="224" y="216">explicit state graph</text>
+
+        <circle class="n-accent" cx="390" cy="160" r="7"/>
+        <text class="t-b" x="404" y="156">CrewAI</text>
+        <text class="t-xs t-muted" x="404" y="170">Flows explicit · Crews role-driven</text>
+
+        <circle class="n-accent" cx="540" cy="232" r="7"/>
+        <text class="t-b" x="554" y="228">AutoGen / AG2</text>
+        <text class="t-xs t-muted" x="554" y="242">conversation, speaker selection</text>
+
+        <circle class="n-accent" cx="640" cy="276" r="7"/>
+        <text class="t-b" x="654" y="272">OpenAI Agents SDK</text>
+        <text class="t-xs t-muted" x="654" y="286">light primitives: handoffs, guardrails</text>
+
+        <circle class="n-accent" cx="770" cy="312" r="7"/>
+        <text class="t-b" x="784" y="308">Strands</text>
+        <text class="t-xs t-muted" x="784" y="322">model-driven loop</text>
+
+        <circle class="n-accent" cx="590" cy="326" r="7"/>
+        <text class="t-b" x="604" y="322">smolagents</text>
+        <text class="t-xs t-muted" x="604" y="336">code as actions</text>
+
+        <circle class="n-violet" cx="760" cy="96" r="7"/>
+        <text class="t-b" x="746" y="92" text-anchor="end">Claude Agent SDK</text>
+        <text class="t-xs t-muted" x="746" y="106" text-anchor="end">the Claude Code harness as a library</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 21.1</b>A rough map, and one reading of it: argue with the positions. Most frameworks can be pushed around the map (LangGraph ships a prebuilt model-driven agent; the OpenAI SDK can be driven from your own code), so the dots mark each one's default. Where would your swarm harness sit? Mark it in your notes now and again at Stage 9.</figcaption>
+  </figure>
+
+  <h2 id="mapping" data-short="Concept → framework">Concept → framework mapping</h2>
+  <p>Each row is a concept from this guide. Each cell names the primitive a framework uses for it. When a cell says “your code”, the framework leaves that concept to you. The table is deliberately short-worded: use it to know <em>what to look up</em>, not as API reference.</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Concept</th><th>LangGraph</th><th>OpenAI Agents SDK</th><th>Claude Agent SDK</th><th>AutoGen / AG2</th><th>CrewAI</th><th>Strands</th><th>smolagents</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Agent loop</strong> <span class="muted">Ch 03</span></td><td>a graph you build, or a prebuilt ReAct agent</td><td>the Runner's run loop</td><td>Claude Code's loop</td><td>agent replies; team runs</td><td>an agent executing a task</td><td>a model-driven event loop</td><td>a multi-step ReAct loop</td></tr>
+        <tr><td><strong>Tools</strong> <span class="muted">Ch 04</span></td><td>tool nodes</td><td>function tools; hosted tools</td><td>built-in tools (files, shell, search) plus custom tools via MCP</td><td>functions registered on agents</td><td>tools attached to agents</td><td>decorated Python functions; MCP</td><td>Python functions; actions written as code</td></tr>
+        <tr><td><strong>Delegation</strong> <span class="muted">Ch 15–16</span></td><td>subgraphs; fan-out to parallel branches</td><td>handoffs; agents as tools</td><td>subagents</td><td>group chats and teams</td><td>crews; a hierarchical manager</td><td>agents as tools; swarm and graph patterns</td><td>managed agents</td></tr>
+        <tr><td><strong>Control flow</strong> <span class="muted">Ch 09</span></td><td>explicit: nodes, edges, conditional edges</td><td>mostly the model (which tool, which handoff)</td><td>mostly the model; hooks can intervene</td><td>speaker selection; termination conditions</td><td>process (sequential or hierarchical); Flows</td><td>mostly the model</td><td>mostly the model</td></tr>
+        <tr><td><strong>State, persistence</strong> <span class="muted">Ch 09</span></td><td>typed state with reducers; checkpointers per thread</td><td>sessions for conversation history</td><td>sessions that can be resumed</td><td>save and load agent and team state</td><td>Flow state; memory options</td><td>session management</td><td>an in-memory log of steps</td></tr>
+        <tr><td><strong>Human in the loop</strong> <span class="muted">Ch 09, 12</span></td><td>interrupts that pause and resume a thread</td><td>your code, around the run</td><td>permission modes and approval callbacks</td><td>a human proxy agent</td><td>human input on tasks</td><td>your code; hooks</td><td>your code</td></tr>
+        <tr><td><strong>Safety controls</strong> <span class="muted">Ch 11–12</span></td><td>your nodes</td><td>input and output guardrails</td><td>allowed tools, permissions, hooks</td><td>isolated code executors</td><td>task guardrails</td><td>hooks</td><td>sandboxed code execution</td></tr>
+        <tr><td><strong>Tracing</strong> <span class="muted">Ch 13</span></td><td>integrates with LangSmith</td><td>built-in tracing</td><td>a streamed message per step; hooks</td><td>OpenTelemetry in newer versions</td><td>event listeners; integrations</td><td>OpenTelemetry</td><td>step logs; instrumentation add-ons</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="small muted">Cells describe each framework's main mechanism as of late 2025. Verify against current docs before you depend on any cell.</p>
+
+  <div class="box stop">
+    <span class="box-label">Stop and look · 2 min</span>
+    <p>Find the row where almost every framework says “the model” or “your code”. That row is the concept frameworks agree least on how to own. Now look at your Figure 20.2: is it a row your harness makes explicit?</p>
+  </div>
+
+  <h2 id="frameworks" data-short="Seven frameworks">Seven frameworks, one at a time</h2>
+  <p>For each framework: its core abstraction, a mental-model diagram, what it gives you, what it hides, and when it fits. Read the “hides” line most carefully. Anthropic's “Building effective agents” makes the same point: frameworks help you start quickly, but they can obscure the prompts and responses underneath, and that's where debugging happens.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 900 470" role="img" aria-label="Four mental models. A, LangGraph: START to an agent node, a conditional edge to a tools node and back, and an edge to END; a shared typed state; a checkpointer saving state each step; interrupts that pause for a human. B, OpenAI Agents SDK: a Runner loop containing an input guardrail, a triage agent that hands off to billing or tech agents, tools, an output guardrail, and tracing of every step. C, Claude Agent SDK: your app calls query() on a full harness containing the loop with compaction, built-in tools, subagents, hooks, permission modes, MCP, sessions and streamed messages. D, AutoGen: planner, coder, critic and user proxy agents around a selector that picks the next speaker in one shared conversation.">
+        <defs>
+          <marker id="f2102-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f2102-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-amber" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f2102-ahv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-violet" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+
+        <text class="t-b" x="20" y="30">A · LangGraph: a state graph</text>
+        <rect class="n-sunken" x="20" y="50" width="60" height="26" rx="13"/><text class="t-caps" x="50" y="67" text-anchor="middle">start</text>
+        <rect class="n-accent" x="110" y="46" width="90" height="34" rx="6"/><text class="t-b" x="155" y="68" text-anchor="middle">agent</text>
+        <rect class="n-plain" x="250" y="46" width="90" height="34" rx="6"/><text class="t-b" x="295" y="68" text-anchor="middle">tools</text>
+        <rect class="n-sunken" x="110" y="120" width="90" height="26" rx="13"/><text class="t-caps" x="155" y="137" text-anchor="middle">end</text>
+        <line x1="80" y1="63" x2="108" y2="63" marker-end="url(#f2102-ah)"/>
+        <line class="e-amber" x1="200" y1="56" x2="248" y2="56" marker-end="url(#f2102-aha)"/>
+        <text class="t-xs t-amber" x="224" y="42" text-anchor="middle">tool call?</text>
+        <line x1="250" y1="72" x2="202" y2="72" marker-end="url(#f2102-ah)"/>
+        <text class="t-xs t-muted" x="226" y="94" text-anchor="middle">result</text>
+        <line class="e-amber" x1="155" y1="80" x2="155" y2="118" marker-end="url(#f2102-aha)"/>
+        <text class="t-xs t-amber" x="162" y="104">done?</text>
+        <rect class="n-violet" x="250" y="110" width="180" height="40" rx="6"/>
+        <text class="t-sm t-b" x="340" y="126" text-anchor="middle">State</text>
+        <text class="t-xs" x="340" y="141" text-anchor="middle">typed fields + reducers</text>
+        <line class="e-violet e-dash" x1="295" y1="80" x2="295" y2="108" marker-end="url(#f2102-ahv)"/>
+        <rect class="n-sunken" x="20" y="166" width="410" height="26" rx="5"/>
+        <text class="t-sm" x="225" y="183" text-anchor="middle">checkpointer: saves state after every step, per thread_id</text>
+        <rect class="n-amber" x="20" y="200" width="410" height="22" rx="5"/>
+        <text class="t-xs" x="225" y="215" text-anchor="middle">interrupt: pause before a step, wait for a human, resume from the checkpoint</text>
+
+        <text class="t-b" x="470" y="30">B · OpenAI Agents SDK: agents + handoffs</text>
+        <rect class="n-group" x="470" y="42" width="410" height="148" rx="6"/>
+        <text class="t-caps t-muted" x="480" y="58">Runner: the loop</text>
+        <rect class="n-amber" x="480" y="66" width="100" height="24" rx="4"/><text class="t-xs" x="530" y="82" text-anchor="middle">input guardrail</text>
+        <rect class="n-accent" x="600" y="62" width="110" height="32" rx="5"/><text class="t-sm t-b" x="655" y="82" text-anchor="middle">Triage agent</text>
+        <rect class="n-plain" x="750" y="62" width="120" height="32" rx="5"/><text class="t-sm t-b" x="810" y="82" text-anchor="middle">Billing agent</text>
+        <rect class="n-plain" x="750" y="108" width="120" height="32" rx="5"/><text class="t-sm t-b" x="810" y="128" text-anchor="middle">Tech agent</text>
+        <rect x="600" y="110" width="110" height="26" rx="4"/><text class="t-xs" x="655" y="127" text-anchor="middle">function tools</text>
+        <rect class="n-amber" x="750" y="152" width="120" height="24" rx="4"/><text class="t-xs" x="810" y="168" text-anchor="middle">output guardrail</text>
+        <line x1="580" y1="78" x2="598" y2="78" marker-end="url(#f2102-ah)"/>
+        <line class="e-accent" x1="710" y1="78" x2="748" y2="78" marker-end="url(#f2102-ah)"/>
+        <path class="e-accent" d="M710,88 C730,88 728,124 748,124" marker-end="url(#f2102-ah)"/>
+        <text class="t-xs t-accent" x="729" y="70" text-anchor="middle">handoff</text>
+        <line class="e-muted e-dash" x1="655" y1="94" x2="655" y2="108"/>
+        <line x1="810" y1="140" x2="810" y2="150" marker-end="url(#f2102-ah)"/>
+        <rect class="n-violet" x="470" y="198" width="410" height="24" rx="5"/>
+        <text class="t-xs" x="675" y="214" text-anchor="middle">tracing: every model call, tool call, handoff and guardrail is a span</text>
+
+        <text class="t-b" x="20" y="265">C · Claude Agent SDK: a full harness</text>
+        <rect class="n-plain" x="20" y="280" width="84" height="60" rx="6"/>
+        <text class="t-sm t-b" x="62" y="304" text-anchor="middle">your app</text>
+        <text class="t-mono" x="62" y="324" text-anchor="middle">query()</text>
+        <line x1="104" y1="310" x2="128" y2="310" marker-start="url(#f2102-ah)" marker-end="url(#f2102-ah)"/>
+        <rect class="n-accent" x="130" y="276" width="300" height="176" rx="6"/>
+        <text class="t-caps" x="142" y="294">the Claude Code harness</text>
+        <rect x="142" y="304" width="136" height="24" rx="4"/><text class="t-xs" x="210" y="320" text-anchor="middle">loop + auto compaction</text>
+        <rect x="286" y="304" width="134" height="24" rx="4"/><text class="t-xs" x="353" y="320" text-anchor="middle">built-in tools</text>
+        <rect x="142" y="334" width="136" height="24" rx="4"/><text class="t-xs" x="210" y="350" text-anchor="middle">subagents</text>
+        <rect x="286" y="334" width="134" height="24" rx="4"/><text class="t-xs" x="353" y="350" text-anchor="middle">hooks around tool calls</text>
+        <rect x="142" y="364" width="136" height="24" rx="4"/><text class="t-xs" x="210" y="380" text-anchor="middle">permission modes</text>
+        <rect x="286" y="364" width="134" height="24" rx="4"/><text class="t-xs" x="353" y="380" text-anchor="middle">MCP for custom tools</text>
+        <rect x="142" y="394" width="136" height="24" rx="4"/><text class="t-xs" x="210" y="410" text-anchor="middle">sessions you can resume</text>
+        <rect x="286" y="394" width="134" height="24" rx="4"/><text class="t-xs" x="353" y="410" text-anchor="middle">streamed messages</text>
+        <text class="t-xs t-muted" x="280" y="440" text-anchor="middle">you configure it; the loop and tools already exist</text>
+
+        <text class="t-b" x="470" y="265">D · AutoGen / AG2: agents in a conversation</text>
+        <rect class="n-amber" x="610" y="330" width="120" height="34" rx="6"/>
+        <text class="t-sm t-b" x="670" y="351" text-anchor="middle">speaker selector</text>
+        <rect class="n-plain" x="480" y="290" width="90" height="28" rx="5"/><text class="t-sm" x="525" y="308" text-anchor="middle">planner</text>
+        <rect class="n-plain" x="780" y="290" width="90" height="28" rx="5"/><text class="t-sm" x="825" y="308" text-anchor="middle">coder</text>
+        <rect class="n-plain" x="480" y="396" width="90" height="28" rx="5"/><text class="t-sm" x="525" y="414" text-anchor="middle">critic</text>
+        <rect class="n-plain" x="780" y="396" width="90" height="28" rx="5"/><text class="t-sm" x="825" y="414" text-anchor="middle">user proxy</text>
+        <line class="e-muted" x1="610" y1="338" x2="570" y2="312"/>
+        <line class="e-muted" x1="730" y1="338" x2="780" y2="312"/>
+        <line class="e-muted" x1="610" y1="358" x2="570" y2="402"/>
+        <line class="e-muted" x1="730" y1="358" x2="780" y2="402"/>
+        <text class="t-xs t-muted" x="670" y="318" text-anchor="middle">who speaks next?</text>
+        <text class="t-xs t-muted" x="670" y="384" text-anchor="middle">all read one shared thread</text>
+        <text class="t-xs t-muted" x="470" y="446">v0.4 rebuilt it on an event-driven core; AG2 continues the 0.2-style API.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 21.2</b>Four mental models. In A your code draws the arrows; in B and C the model chooses most of them; in D a selector (rules or a model) picks who talks next in one shared conversation. Look for each framework's version of your Figure 20.2 components: where is the budget? where is the spawn policy?</figcaption>
+  </figure>
+
+  <h3>A · LangGraph</h3>
+  <dl class="defs">
+    <dt>Core idea</dt><dd>You define a <strong>state graph</strong>: a typed state object, <em>nodes</em> (functions that read the state and return an update), <em>edges</em>, and <em>conditional edges</em> (a function of the state picks the next node). <em>Reducers</em> say how updates merge, for example “append to the message list” rather than “overwrite”. A <strong>checkpointer</strong> saves the state after each step under a <code>thread_id</code>, which gives you resume, replay and human-in-the-loop <strong>interrupts</strong>. Fan-out to a variable number of parallel branches is supported.</dd>
+    <dt>Gives you</dt><dd>Explicit, inspectable control flow (Chapter 09 made concrete), durable state, pause and resume, subgraphs for nesting.</dd>
+    <dt>Hides</dt><dd>Less than most. The prebuilt agents hide their prompts. Reducer semantics can surprise you when two parallel branches update the same key.</dd>
+    <dt>Fits when</dt><dd>You can draw the flow in advance, or need durable, resumable runs with human checkpoints.</dd>
+  </dl>
+
+  <h3>B · OpenAI Agents SDK</h3>
+  <dl class="defs">
+    <dt>Core idea</dt><dd>A small set of primitives. An <strong>Agent</strong> is instructions, a model, tools, and optionally handoffs, guardrails and an output type. A <strong>Runner</strong> runs the loop: call the model; if it produced a final output, stop; if it chose a handoff, switch the active agent; if it called tools, run them and loop, up to a turn limit. <strong>Handoffs</strong> appear to the model as tools (“transfer to the billing agent”) and pass control. <strong>Agents as tools</strong> keep control with the caller. <strong>Guardrails</strong> check input or output and can trip to halt a run. <strong>Tracing</strong> is built in. It is the production successor to OpenAI's experimental Swarm (Chapter 18).</dd>
+    <dt>Gives you</dt><dd>A fast start for routing and handoff topologies (Chapter 15), plus tracing without extra work.</dd>
+    <dt>Hides</dt><dd>The loop itself, the text that describes handoffs to the model, and what history the next agent receives on a handoff (configurable, so look it up).</dd>
+    <dt>Fits when</dt><dd>Your problem is triage and routing between specialists, or you want few concepts and good defaults. It can use non-OpenAI models through adapters; check the current docs.</dd>
+  </dl>
+
+  <h3>C · Claude Agent SDK</h3>
+  <dl class="defs">
+    <dt>Core idea</dt><dd>The harness that runs Claude Code, offered as a library for Python and TypeScript (it was called the Claude Code SDK before it was renamed). You pass a prompt and options: system prompt, allowed tools, permission mode, MCP servers, subagent definitions and hooks. It runs the whole loop, including built-in tools for files, shell commands and search, automatic context compaction, <strong>subagents</strong> with their own context windows, <strong>hooks</strong> that run your code before or after tool calls, and <strong>permission</strong> checks.</dd>
+    <dt>Gives you</dt><dd>A production-tested harness: almost every component from Chapter 08, already written. It is the clearest worked example of “harness as a product”.</dd>
+    <dt>Hides</dt><dd>A lot, by design: the loop, the compaction strategy, the tool implementations, and the default system prompt unless you replace it.</dd>
+    <dt>Fits when</dt><dd>Your agents work in a computer environment (files, code, shell), and you'd rather configure a mature harness than write one. It is built for Claude models.</dd>
+  </dl>
+
+  <h3>D · AutoGen and AG2</h3>
+  <dl class="defs">
+    <dt>Core idea</dt><dd><strong>Agents as participants in a conversation.</strong> In the original design (v0.2), a <em>conversable agent</em> can send and receive messages. An assistant agent writes, and a user-proxy agent can run code or stand in for a human. A <strong>group chat</strong> has a manager that selects the next speaker: round-robin, chosen by a model, or by your rule. Version 0.4 (early 2025) rebuilt AutoGen in layers: an event-driven core where agents pass messages like actors, and a high-level layer with ready-made teams.</dd>
+    <dt>Lineage</dt><dd>In late 2024 some of AutoGen's original authors continued the v0.2-style project as <strong>AG2</strong>, under a separate organization. In late 2025 Microsoft announced the <strong>Microsoft Agent Framework</strong>, bringing together ideas from AutoGen and Semantic Kernel, and pointed new projects towards it. Treat the status of each as something to check, not assume.</dd>
+    <dt>Hides</dt><dd>The speaker-selection prompt, and how fast the shared conversation grows: every agent reads every message, so context grows with agents × turns.</dd>
+    <dt>Fits when</dt><dd>You are exploring conversation-shaped collaboration: debate, critique, code-and-review loops (Chapter 17).</dd>
+  </dl>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 900 250" role="img" aria-label="Three more mental models. E, CrewAI: agents defined by role, goal and backstory, a list of tasks with expected outputs, and a process that is sequential or hierarchical, wrapped in an event-driven Flow. F, Strands Agents: a model, tools and a prompt make an agent, and the model drives a loop of tool calls until done. G, smolagents: the model writes a Python snippet, a sandbox executes it, and the printed output returns as an observation.">
+        <defs>
+          <marker id="f2103-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-b" x="20" y="24">E · CrewAI: roles, tasks, crews</text>
+        <rect class="n-group" x="14" y="36" width="272" height="176" rx="6"/>
+        <rect class="n-accent" x="24" y="46" width="122" height="58" rx="5"/>
+        <text class="t-sm t-b" x="85" y="64" text-anchor="middle">Researcher</text>
+        <text class="t-xs" x="85" y="80" text-anchor="middle">role · goal</text>
+        <text class="t-xs" x="85" y="94" text-anchor="middle">backstory · tools</text>
+        <rect class="n-accent" x="154" y="46" width="122" height="58" rx="5"/>
+        <text class="t-sm t-b" x="215" y="64" text-anchor="middle">Writer</text>
+        <text class="t-xs" x="215" y="80" text-anchor="middle">role · goal</text>
+        <text class="t-xs" x="215" y="94" text-anchor="middle">backstory · tools</text>
+        <rect x="24" y="114" width="252" height="24" rx="4"/><text class="t-xs" x="32" y="130">Task 1: research X → expected output</text>
+        <rect x="24" y="144" width="252" height="24" rx="4"/><text class="t-xs" x="32" y="160">Task 2: write the report (uses Task 1)</text>
+        <rect class="n-amber" x="24" y="178" width="252" height="24" rx="4"/><text class="t-xs" x="150" y="194" text-anchor="middle">process: sequential, or hierarchical (a manager)</text>
+        <text class="t-xs t-muted" x="150" y="230" text-anchor="middle">Flows: event-driven steps and state around crews</text>
+
+        <text class="t-b" x="320" y="24">F · Strands Agents: model-driven</text>
+        <rect class="n-plain" x="320" y="44" width="80" height="28" rx="5"/><text class="t-sm" x="360" y="62" text-anchor="middle">model</text>
+        <rect class="n-plain" x="410" y="44" width="80" height="28" rx="5"/><text class="t-sm" x="450" y="62" text-anchor="middle">tools</text>
+        <rect class="n-plain" x="500" y="44" width="80" height="28" rx="5"/><text class="t-sm" x="540" y="62" text-anchor="middle">prompt</text>
+        <line x1="360" y1="72" x2="420" y2="102" marker-end="url(#f2103-ah)"/>
+        <line x1="450" y1="72" x2="450" y2="102" marker-end="url(#f2103-ah)"/>
+        <line x1="540" y1="72" x2="480" y2="102" marker-end="url(#f2103-ah)"/>
+        <rect class="n-accent" x="380" y="104" width="140" height="30" rx="6"/><text class="t-b" x="450" y="124" text-anchor="middle">Agent</text>
+        <line x1="450" y1="134" x2="450" y2="150" marker-end="url(#f2103-ah)"/>
+        <rect class="n-sunken" x="340" y="152" width="220" height="50" rx="6"/>
+        <text class="t-sm" x="450" y="172" text-anchor="middle">model picks a tool → run it →</text>
+        <text class="t-sm" x="450" y="190" text-anchor="middle">result back → repeat until done</text>
+        <text class="t-xs t-muted" x="450" y="230" text-anchor="middle">you write no control flow; the model plans it</text>
+
+        <text class="t-b" x="620" y="24">G · smolagents: code as actions</text>
+        <rect class="n-plain" x="620" y="44" width="120" height="30" rx="5"/><text class="t-b" x="680" y="64" text-anchor="middle">model</text>
+        <rect class="n-amber" x="760" y="44" width="120" height="30" rx="5"/><text class="t-b" x="820" y="64" text-anchor="middle">sandbox</text>
+        <line x1="680" y1="74" x2="680" y2="96" marker-end="url(#f2103-ah)"/>
+        <text class="t-xs" x="686" y="89">writes Python</text>
+        <rect class="n-sunken" x="620" y="98" width="260" height="46" rx="5"/>
+        <text class="t-mono" x="632" y="117">r = search("pgvector")</text>
+        <text class="t-mono" x="632" y="135">final_answer(summarize(r))</text>
+        <line x1="820" y1="98" x2="820" y2="76" marker-end="url(#f2103-ah)"/>
+        <text class="t-xs" x="826" y="91">runs it</text>
+        <rect x="620" y="160" width="260" height="26" rx="5"/><text class="t-xs" x="750" y="177" text-anchor="middle">observation: printed output, errors</text>
+        <line x1="750" y1="144" x2="750" y2="158" marker-end="url(#f2103-ah)"/>
+        <path d="M620,173 H612 V59 H618" marker-end="url(#f2103-ah)"/>
+        <text class="t-xs t-muted" x="620" y="214">one code action can call several tools at once</text>
+        <text class="t-xs t-muted" x="620" y="230">a JSON tool-calling agent exists too</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 21.3</b>Three more mental models. E frames agents as job roles and work as a task list; F gives the model the loop and asks you only for tools and a prompt; G changes the <em>action format</em> itself, from JSON tool calls to small programs.</figcaption>
+  </figure>
+
+  <h3>E · CrewAI</h3>
+  <dl class="defs">
+    <dt>Core idea</dt><dd><strong>Agents as job roles.</strong> Each agent has a role, a goal and a backstory, plus tools. <strong>Tasks</strong> have a description and an expected output, and are assigned to agents. A <strong>crew</strong> runs its tasks under a <em>process</em>: sequential (each output feeds the next) or hierarchical (a manager agent delegates and checks). <strong>Flows</strong> add event-driven, stateful control around crews when you need explicit steps.</dd>
+    <dt>Gives you</dt><dd>A vocabulary that maps well to business processes, and quick prototypes of pipeline and hierarchical topologies.</dd>
+    <dt>Hides</dt><dd>The prompts generated from role, goal and backstory, and the delegation prompts in hierarchical mode. Role-play framing can also encourage agents to imitate a process rather than verify facts.</dd>
+    <dt>Fits when</dt><dd>The work really is a sequence of role-shaped tasks with clear expected outputs.</dd>
+  </dl>
+
+  <h3>F · Strands Agents</h3>
+  <dl class="defs">
+    <dt>Core idea</dt><dd>An open-source SDK from AWS (2025) built around a <strong>model-driven</strong> approach: an agent is a model, tools and a prompt, and the model plans, chooses tools and decides when it's done. The SDK runs the loop. Tools are ordinary decorated Python functions, and MCP servers can supply more. It supports several model providers, with Amazon Bedrock as the default. Later versions added multi-agent patterns, including agents as tools, swarm and graph.</dd>
+    <dt>Gives you</dt><dd>Very little code for a working agent, and OpenTelemetry-based observability.</dd>
+    <dt>Hides</dt><dd>Not much code, but nearly all control: the trajectory belongs to the model. Your limits and checks must come from configuration, hooks or the tools themselves.</dd>
+    <dt>Fits when</dt><dd>You trust a strong model to plan, want thin code, and often when you deploy on AWS.</dd>
+  </dl>
+
+  <h3>G · smolagents</h3>
+  <dl class="defs">
+    <dt>Core idea</dt><dd>A Hugging Face library with a deliberately small core. Its main idea: a <strong>code agent</strong> writes each action as a Python snippet instead of a JSON tool call. One snippet can call several tools, loop, and keep variables, which saves steps. This builds on the CodeAct research (Wang et al., 2024), which found code actions can improve agent success rates. Code runs in a restricted local interpreter or a remote sandbox. A standard tool-calling agent is also available, and agents can manage other agents.</dd>
+    <dt>Gives you</dt><dd>A core small enough to read in an afternoon. If you want to see a real agent loop in someone else's code, read this one.</dd>
+    <dt>Hides</dt><dd>Little. The risk is in what it does: running model-written code. That is Chapter 12's threat model in its sharpest form, so sandbox it.</dd>
+    <dt>Fits when</dt><dd>You're learning, doing research, or solving data-heavy tasks where code is the natural action.</dd>
+  </dl>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>None of these frameworks gives you your swarm harness's hardest parts for free.</strong> Recursive spawning with enforced depth, fan-out and budget limits, an atomic budget ledger across concurrent agents, and failure-as-data aggregation are things you either write or configure deliberately in every one of them. That's why building them yourself first (Stages 1–6) makes you better at using any of them.</p>
+  </div>
+
+  <h2 id="protocols" data-short="MCP and A2A">Two protocols: MCP and A2A</h2>
+  <p>Frameworks are libraries inside one program. Protocols are agreements <em>between</em> programs. Two matter for agents, and they solve different problems. Chapter 04 introduced MCP and Chapter 17 compared the two; here they are side by side.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 900 330" role="img" aria-label="Left: MCP. A host application containing an agent loop and three MCP clients, each connected over JSON-RPC to one MCP server, for files, a database and ticketing. Servers expose tools, resources and prompts. Right: A2A. Agent A, the client, fetches Agent B's Agent Card, sends a task, and receives status updates and artifacts. Below, a simplified task lifecycle: submitted, working, input-required, completed or failed.">
+        <defs>
+          <marker id="f2104-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f2104-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-b" x="20" y="24">MCP · an agent ↔ its tools and data</text>
+        <text class="t-xs t-muted" x="20" y="38">introduced by Anthropic, 2024</text>
+        <rect class="n-plain" x="20" y="50" width="160" height="200" rx="6"/>
+        <text class="t-b" x="100" y="70" text-anchor="middle">Host app</text>
+        <text class="t-xs t-muted" x="100" y="84" text-anchor="middle">an IDE, chat app or harness</text>
+        <rect class="n-sunken" x="32" y="94" width="136" height="28" rx="4"/><text class="t-sm" x="100" y="112" text-anchor="middle">agent loop + model</text>
+        <rect x="32" y="134" width="136" height="26" rx="4"/><text class="t-sm" x="100" y="151" text-anchor="middle">MCP client 1</text>
+        <rect x="32" y="168" width="136" height="26" rx="4"/><text class="t-sm" x="100" y="185" text-anchor="middle">MCP client 2</text>
+        <rect x="32" y="202" width="136" height="26" rx="4"/><text class="t-sm" x="100" y="219" text-anchor="middle">MCP client 3</text>
+        <rect class="n-accent" x="250" y="134" width="180" height="26" rx="4"/><text class="t-sm" x="340" y="151" text-anchor="middle">server: files</text>
+        <rect class="n-accent" x="250" y="168" width="180" height="26" rx="4"/><text class="t-sm" x="340" y="185" text-anchor="middle">server: database</text>
+        <rect class="n-accent" x="250" y="202" width="180" height="26" rx="4"/><text class="t-sm" x="340" y="219" text-anchor="middle">server: ticketing</text>
+        <line x1="168" y1="147" x2="248" y2="147" marker-start="url(#f2104-ah)" marker-end="url(#f2104-ah)"/>
+        <line x1="168" y1="181" x2="248" y2="181" marker-start="url(#f2104-ah)" marker-end="url(#f2104-ah)"/>
+        <line x1="168" y1="215" x2="248" y2="215" marker-start="url(#f2104-ah)" marker-end="url(#f2104-ah)"/>
+        <text class="t-xs" x="208" y="129" text-anchor="middle">JSON-RPC</text>
+        <text class="t-sm" x="20" y="274">each server offers tools, resources and prompts</text>
+        <text class="t-sm" x="20" y="292">transport: stdio for local servers, HTTP for remote</text>
+        <text class="t-sm t-muted" x="20" y="310">the host decides which servers an agent may use</text>
+
+        <line class="e-line e-dash" x1="450" y1="10" x2="450" y2="320"/>
+
+        <text class="t-b" x="470" y="24">A2A · an agent ↔ another agent</text>
+        <text class="t-xs t-muted" x="470" y="38">introduced by Google, 2025; now hosted by the Linux Foundation</text>
+        <rect class="n-plain" x="470" y="50" width="130" height="84" rx="6"/>
+        <text class="t-b" x="535" y="86" text-anchor="middle">Agent A</text>
+        <text class="t-xs t-muted" x="535" y="102" text-anchor="middle">client · your orchestrator</text>
+        <rect class="n-violet" x="760" y="50" width="120" height="84" rx="6"/>
+        <text class="t-b" x="820" y="86" text-anchor="middle">Agent B</text>
+        <text class="t-xs t-muted" x="820" y="102" text-anchor="middle">remote and opaque</text>
+        <line x1="600" y1="74" x2="758" y2="74" marker-end="url(#f2104-ah)"/>
+        <text class="t-xs" x="680" y="68" text-anchor="middle">1 · fetch the Agent Card</text>
+        <line x1="600" y1="98" x2="758" y2="98" marker-end="url(#f2104-ah)"/>
+        <text class="t-xs" x="680" y="92" text-anchor="middle">2 · send a task (message)</text>
+        <line class="e-muted e-dash" x1="760" y1="122" x2="602" y2="122" marker-end="url(#f2104-ahm)"/>
+        <text class="t-xs t-muted" x="680" y="116" text-anchor="middle">3 · status updates, artifacts</text>
+
+        <text class="t-caps t-muted" x="470" y="160">task lifecycle (simplified)</text>
+        <rect x="470" y="170" width="84" height="26" rx="4"/><text class="t-xs" x="512" y="187" text-anchor="middle">submitted</text>
+        <rect class="n-accent" x="568" y="170" width="72" height="26" rx="4"/><text class="t-xs" x="604" y="187" text-anchor="middle">working</text>
+        <rect class="n-amber" x="654" y="170" width="104" height="26" rx="4"/><text class="t-xs" x="706" y="187" text-anchor="middle">input-required</text>
+        <rect x="772" y="170" width="108" height="26" rx="4"/><text class="t-xs" x="826" y="187" text-anchor="middle">completed / failed</text>
+        <line x1="554" y1="183" x2="566" y2="183" marker-end="url(#f2104-ah)"/>
+        <line x1="640" y1="183" x2="652" y2="183" marker-end="url(#f2104-ah)"/>
+        <line x1="758" y1="183" x2="770" y2="183" marker-end="url(#f2104-ah)"/>
+        <path class="e-muted" d="M706,196 V210 H604 V198" marker-end="url(#f2104-ahm)"/>
+        <text class="t-xs t-muted" x="655" y="224" text-anchor="middle">client sends more input</text>
+        <text class="t-sm" x="470" y="256">B stays opaque: no shared memory, tools or prompts</text>
+        <text class="t-sm" x="470" y="274">discovery: a published Agent Card (skills, endpoint, auth)</text>
+        <text class="t-sm t-muted" x="470" y="292">built on HTTP and JSON-RPC, with streaming updates</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 21.4</b>MCP connects <em>an agent to capabilities</em> (tools, data, prompts) that it controls. A2A connects <em>an agent to another agent</em> that it does not control and cannot see inside. A system can use both: an orchestrator talks A2A to a remote specialist, and each of them uses MCP for its own tools. The lifecycle has more states than shown; check the current specification.</figcaption>
+  </figure>
+
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th></th><th>MCP</th><th>A2A</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Connects</strong></td><td>a host's agent to tool and data servers</td><td>a client agent to a remote agent</td></tr>
+        <tr><td><strong>The other side is</strong></td><td>a capability provider: it does what it's asked</td><td>an autonomous agent: it decides how to do the task</td></tr>
+        <tr><td><strong>Unit of work</strong></td><td>a tool call, a resource read</td><td>a task with a lifecycle, possibly long-running</td></tr>
+        <tr><td><strong>Discovery</strong></td><td>the client lists a server's tools, resources and prompts</td><td>the client reads the remote agent's Agent Card</td></tr>
+        <tr><td><strong>Problem it solves</strong></td><td>M apps × N tools integrations become M + N</td><td>agents from different vendors and frameworks working together</td></tr>
+        <tr><td><strong>Main risk</strong></td><td>untrusted servers: injected instructions in tool descriptions or results (Chapter 12)</td><td>trusting another agent's output and authority across an organizational boundary</td></tr>
+        <tr><td><strong>In your harness</strong></td><td>a possible way to plug in tools (later stages)</td><td>out of scope until agents run as separate services</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="box pitfall">
+    <span class="box-label">A common confusion</span>
+    <p>“We'll use MCP for our agents to talk to each other.” You can wrap an agent as an MCP tool, and people do, but then the caller treats it as a function: one request, one result, no task lifecycle, no negotiation. That's the agent-as-tool pattern. A2A exists for the case where the remote side is a peer with its own long-running work. Pick based on which relationship you actually have.</p>
+  </div>
+
+  <h2 id="evaluate" data-short="How to evaluate">How to evaluate a framework</h2>
+  <p>A framework README tells you what's easy. These questions find out what's hard. Each has a test you can run in about a day, using a task you already understand (Experiment 001 is ideal, because you know what the right trace looks like).</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Ask</th><th>Why it matters</th><th>A one-day test</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Who owns control flow?</strong></td><td>Decides whether you can express your topology, or only approximate it</td><td>Build Experiment 001's tree. Count the workarounds.</td></tr>
+        <tr><td><strong>Where do limits live?</strong></td><td>Limits the model can bypass aren't limits (Chapter 20)</td><td>Ask the model to spawn 50 children. Who stops it, and where?</td></tr>
+        <tr><td><strong>Is it async-native?</strong></td><td>Parallel children need real concurrency and cancellation (Chapter 10)</td><td>Run 10 children with a limit of 3. Cancel the run halfway.</td></tr>
+        <tr><td><strong>What happens on failure?</strong></td><td>Hidden retries cost money; hidden exceptions crash trees (Chapter 11)</td><td>Make one tool raise and one child time out. Read the trace.</td></tr>
+        <tr><td><strong>Can I see every prompt?</strong></td><td>Hidden prompts are where behavior you didn't write comes from</td><td>Log the exact request sent to the model on step 1.</td></tr>
+        <tr><td><strong>Can I use a fake model?</strong></td><td>Without one, your tests aren't deterministic (Chapter 01)</td><td>Write one test with scripted model responses.</td></tr>
+        <tr><td><strong>What persists?</strong></td><td>Resume, replay and human approval all depend on it (Chapter 09)</td><td>Kill the process mid-run. What can you recover?</td></tr>
+        <tr><td><strong>Can I export traces?</strong></td><td>Your company's tooling, not the framework's dashboard (Chapter 13)</td><td>Get one run into OpenTelemetry or your JSONL format.</td></tr>
+        <tr><td><strong>How locked in am I?</strong></td><td>Model providers and APIs change faster than your project</td><td>Swap the model provider. Count the files you touched.</td></tr>
+        <tr><td><strong>What's the security story?</strong></td><td>Tools that run code or reach the network are the attack surface (Chapter 12)</td><td>Find where permissions and sandboxing are configured.</td></tr>
+        <tr><td><strong>Is it healthy?</strong></td><td>Release pace, breaking changes, maintenance status, license</td><td>Read the last three releases' notes and the open issues.</td></tr>
+        <tr><td><strong>Is there an escape hatch?</strong></td><td>You will hit a case the framework didn't plan for</td><td>Replace one step with a raw API call. Does the rest still work?</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 id="build-vs-adopt" data-short="Build vs adopt">Build vs adopt</h2>
+  <p>The honest answer is usually “both, at different layers”: adopt the boring parts (HTTP clients, schema validation, tracing exporters) and decide deliberately about the orchestration core. The flow below is a heuristic for that one decision.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 760 364" role="img" aria-label="A decision flow. If orchestration is the core of what you are building, or if no framework's default topology fits, lean towards building the core. Otherwise, if you can't see and test every prompt, retry and limit the framework adds, or can't accept its release pace and lock-in, adopt it behind your own interface. If you can, adopt it directly.">
+        <defs>
+          <marker id="f2105-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-plain" x="20" y="20" width="430" height="40" rx="6"/><text x="32" y="45">Q1 · Is orchestration the core of what you're building?</text>
+        <rect class="n-plain" x="20" y="90" width="430" height="40" rx="6"/><text x="32" y="115">Q2 · Does a framework's default topology fit?</text>
+        <rect class="n-plain" x="20" y="160" width="430" height="40" rx="6"/><text x="32" y="185">Q3 · Can you see and test every prompt, retry, limit?</text>
+        <rect class="n-plain" x="20" y="230" width="430" height="40" rx="6"/><text x="32" y="255">Q4 · Can you live with its release pace and lock-in?</text>
+
+        <rect class="n-accent" x="520" y="20" width="220" height="110" rx="6"/>
+        <text class="t-b" x="630" y="62" text-anchor="middle">Build the core</text>
+        <text class="t-xs" x="630" y="80" text-anchor="middle">own the loop, limits and ledger;</text>
+        <text class="t-xs" x="630" y="94" text-anchor="middle">borrow small libraries</text>
+        <rect class="n-amber" x="520" y="160" width="220" height="110" rx="6"/>
+        <text class="t-b" x="630" y="202" text-anchor="middle">Adopt behind your interface</text>
+        <text class="t-xs" x="630" y="220" text-anchor="middle">wrap it so you can swap it;</text>
+        <text class="t-xs" x="630" y="234" text-anchor="middle">your tests target the wrapper</text>
+        <rect class="n-violet" x="20" y="300" width="430" height="40" rx="6"/>
+        <text x="32" y="325"><tspan class="t-b">Adopt directly</tspan> · move fast; revisit if it fights you</text>
+
+        <line x1="450" y1="40" x2="518" y2="40" marker-end="url(#f2105-ah)"/><text class="t-xs" x="484" y="34" text-anchor="middle">yes</text>
+        <line x1="235" y1="60" x2="235" y2="88" marker-end="url(#f2105-ah)"/><text class="t-xs" x="242" y="78">no</text>
+        <line x1="450" y1="110" x2="518" y2="110" marker-end="url(#f2105-ah)"/><text class="t-xs" x="484" y="104" text-anchor="middle">no</text>
+        <line x1="235" y1="130" x2="235" y2="158" marker-end="url(#f2105-ah)"/><text class="t-xs" x="242" y="148">yes</text>
+        <line x1="450" y1="180" x2="518" y2="180" marker-end="url(#f2105-ah)"/><text class="t-xs" x="484" y="174" text-anchor="middle">no</text>
+        <line x1="235" y1="200" x2="235" y2="228" marker-end="url(#f2105-ah)"/><text class="t-xs" x="242" y="218">yes</text>
+        <line x1="450" y1="250" x2="518" y2="250" marker-end="url(#f2105-ah)"/><text class="t-xs" x="484" y="244" text-anchor="middle">no</text>
+        <line x1="235" y1="270" x2="235" y2="298" marker-end="url(#f2105-ah)"/><text class="t-xs" x="242" y="288">yes</text>
+        <text class="t-sm t-muted" x="20" y="358">A heuristic, not a rule. Answer each question with evidence, not with a README.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 21.5</b>Build vs adopt, for the orchestration core only. In your plan, learning is the stated goal of Stages 1–8, which is an answer to Q1 for now. Stage 9 is where you answer Q2–Q4 with evidence from a side-by-side build, and that answer may differ for the version your company runs.</figcaption>
+  </figure>
+
+  <div class="box pitfall">
+    <span class="box-label">Traps when choosing</span>
+    <ul>
+      <li><strong>Learning the framework instead of the concept.</strong> If you can't say which Chapter 03–17 concept a class implements, you're memorizing an API that will change.</li>
+      <li><strong>“Supports multi-agent” ≠ “supports your swarm”.</strong> Most frameworks support delegation. Few enforce recursive depth, fan-out and budget limits the way your requirements need.</li>
+      <li><strong>Old tutorials.</strong> Many AutoGen examples online use the v0.2 API, which differs a lot from v0.4. Check the version of every snippet.</li>
+      <li><strong>Mixing two frameworks' abstractions</strong> in one program. You get two loops, two state models and two tracing systems.</li>
+      <li><strong>Trusting default prompts.</strong> They were tuned for someone else's tasks and models.</li>
+    </ul>
+  </div>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness · Stage 9</span>
+    <ul>
+      <li>Pick <strong>one</strong> framework (your choice; the evaluation table is how you choose). Rebuild Experiment 001 in it, with the same tasks, model and limits.</li>
+      <li>Compare on things you can measure: lines of code, tokens and wall time per run, how a child failure appears in the trace, and how many of the twelve evaluation questions it answers well.</li>
+      <li>Write a one-page “build vs adopt” note for your company use case. It's allowed to conclude “adopt”: Stages 1–8 were for learning, and Stage 9 is for deciding.</li>
+      <li>Design question for you: which interface in your harness would let you swap your executor for a framework's runner without touching the spawn service?</li>
+    </ul>
+  </div>
+
+  <h2 id="check">Check yourself</h2>
+  <p>Answer each one out loud or on paper before you open it.</p>
+  <div class="quiz">
+    <details>
+      <summary><span class="tag recall">Recall</span> What's the difference between a handoff and calling an agent as a tool?</summary>
+      <div><p>In a handoff, control transfers: the new agent takes over the conversation and the original agent is no longer driving. As a tool, the calling agent keeps control: it sends a request, gets a result back, and decides what to do next. Your spawn-and-aggregate design is the agent-as-tool shape.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag recall">Recall</span> MCP vs A2A in two sentences.</summary>
+      <div><p>MCP standardizes how an agent's host connects to tool and data servers, so integrations become M + N instead of M × N. A2A standardizes how one agent asks a remote, opaque agent to do a task, with discovery through an Agent Card and a task lifecycle.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> You build your swarm in LangGraph. Where would your depth limit and budget check live?</summary>
+      <div><p>As fields in the graph state (depth, agents used, tokens reserved) and in the logic that decides whether to fan out: a node or conditional edge that checks the limits before creating parallel branches or entering a subgraph. The reducer for the counters must make concurrent updates combine correctly. The point: the framework gives you the place to put the check, but not the check.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> In a handoff-based system, two agents keep handing the conversation back and forth. Which harness concept is missing, and where would you add it?</summary>
+      <div><p>Loop detection and a step budget (Chapter 11). Most runners have a maximum-turns limit, which stops it eventually but late. Better: count handoffs per run in your context, refuse a handoff back to an agent that just handed off, and record it as a trace event so you can see how often it happens.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> A colleague proposes adopting CrewAI for the company version. Which three evaluation questions would you ask first, and why?</summary>
+      <div><p>One defensible set: “Where do limits live?” (recursive spawning with hard limits is your core requirement), “Can I see every prompt?” (role and backstory prompts are generated for you), and “What happens on failure?” (partial results are part of your design). The important part is that you choose from <em>your</em> requirements in Figure 20.1, not from the framework's feature list.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “Why did you build your own harness instead of using an existing framework?”</summary>
+      <div><p>Structure: (1) the goal: learning the mechanisms, and specific requirements: recursive spawning with enforced limits, an atomic budget across concurrent agents, failures as data. (2) The evidence: a Stage 9 side-by-side on the same task, with numbers. (3) Credit where due: what the framework did better (for example persistence or tracing UI). (4) What you'd do in production: possibly adopt it behind your own interface. Avoid “frameworks are bad”; that's a red flag.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “What is MCP, and what are its risks?”</summary>
+      <div><p>An open protocol (JSON-RPC based) between a host application's clients and servers that expose tools, resources and prompts, so one server works with many hosts. Risks: a malicious or compromised server can put instructions into tool descriptions or results (indirect prompt injection), tools may have more permission than needed, and combining private data, untrusted content and an exfiltration channel recreates the lethal trifecta (Chapter 12). Mitigate with least privilege, allow-lists of servers, and human approval for risky tools.</p></div>
+    </details>
+  </div>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><strong>Erik Schluntz and Barry Zhang, “Building effective agents”</strong> (Anthropic, 2024).<span class="why">The case for starting with direct API calls and adopting frameworks with care, because abstractions can hide the prompts you need to debug.</span></li>
+    <li><strong>LangChain, LangGraph documentation:</strong> the concept pages on graphs, persistence and human-in-the-loop.<span class="why">State, reducers, checkpointers and interrupts, from the source.</span></li>
+    <li><strong>OpenAI, Agents SDK documentation</strong> (2025).<span class="why">Agents, the runner loop, handoffs, guardrails and tracing.</span></li>
+    <li><strong>Anthropic, Claude Agent SDK documentation</strong> (2025).<span class="why">Tools, subagents, hooks, permissions and sessions. Compare its component list with Chapter 08.</span></li>
+    <li><strong>Qingyun Wu et al., “AutoGen: Enabling Next-Gen LLM Applications via Multi-Agent Conversation”</strong> (arXiv, 2023).<span class="why">The original conversable-agent and group-chat design.</span></li>
+    <li><strong>CrewAI documentation:</strong> agents, tasks, crews, processes and Flows.<span class="why">The role-based vocabulary, explained by its authors.</span></li>
+    <li><strong>AWS, Strands Agents documentation</strong> (2025).<span class="why">The model-driven approach and its multi-agent patterns.</span></li>
+    <li><strong>Hugging Face, smolagents documentation</strong>, and <strong>Xingyao Wang et al., “Executable Code Actions Elicit Better LLM Agents”</strong> (ICML, 2024).<span class="why">Code agents, and the CodeAct research behind them.</span></li>
+    <li><strong>Anthropic, “Introducing the Model Context Protocol”</strong> (2024), and the MCP specification.<span class="why">Hosts, clients, servers, and the tools/resources/prompts primitives.</span></li>
+    <li><strong>Google, “Announcing the Agent2Agent Protocol (A2A)”</strong> (2025), and the A2A specification.<span class="why">Agent Cards, tasks and their lifecycle.</span></li>
+  </ul>
+
+  <section class="recall-card" aria-labelledby="recall-21">
+    <h2 id="recall-21" data-short="Recall card">Recall card</h2>
+    <p class="muted small">Cover the page and reproduce these from memory.</p>
+    <ol>
+      <li>A framework is a harness with opinions. Ask: who decides the next step, how much harness is included, and what is hidden?</li>
+      <li>LangGraph: explicit state graph, reducers, checkpointers, interrupts.</li>
+      <li>OpenAI Agents SDK: agents, a runner loop, handoffs, guardrails, tracing.</li>
+      <li>Claude Agent SDK: the Claude Code harness as a library, with tools, subagents, hooks and permissions.</li>
+      <li>AutoGen/AG2: agents in a conversation; Microsoft has since moved towards the Microsoft Agent Framework. CrewAI: roles, tasks, crews, Flows.</li>
+      <li>Strands: a model-driven loop. smolagents: actions written as code, run in a sandbox.</li>
+      <li>MCP connects an agent to tools and data; A2A connects an agent to an opaque remote agent.</li>
+      <li>Evaluate a framework with one-day tests on a task you understand, and decide build vs adopt at the orchestration core.</li>
+    </ol>
+  </section>
+
+  <div class="done">
+    <input type="checkbox" id="done-toggle" data-chapter="21">
+    <label for="done-toggle">I can explain this chapter without notes<small>Saved in this browser only. It updates the count on the guide's home page.</small></label>
+  </div>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="20-swarm-harness-architecture.html"><small>Previous · Chapter 20</small>Designing a swarm harness</a>
+    <a class="next" href="22-interview-bank.html"><small>Next · Chapter 22</small>Review and interview bank</a>
+  </nav>
+
+</main>
+<aside class="toc-rail" aria-label="On this page">
+  <p class="toc-title">In this chapter</p>
+  <nav data-toc></nav>
+</aside>
+</div>
+</body>
+</html>

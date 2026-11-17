@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Spawning and Delegation · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar"><div class="topbar-inner">
+  <a class="brand" href="../index.html">Loop <span>→</span> Swarm</a>
+  <div class="crumbs"><a href="../index.html">Guide</a> · Part 4 · Multi-agent · Chapter 16</div>
+  <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+</div></header>
+
+<div class="page has-toc">
+<main class="chapter">
+
+  <header class="ch-head">
+    <p class="eyebrow"><b>Part 4 · Multi-agent systems</b> · Chapter 16 · Level L4</p>
+    <h1>Spawning and recursive delegation</h1>
+    <p class="lede">How an agent creates another agent, hands it work, and gets the result back, and how a harness stops that from becoming a thousand agents spending your budget. This is the chapter your project is built around, so it asks more questions than it answers.</p>
+    <ul class="ch-meta">
+      <li><b>60 min</b> reading</li>
+      <li>Builds on: <b>ch04 Tool use, ch10 Concurrency, ch11 Reliability, ch15 Topologies</b></li>
+      <li>Your project: <b>Stages 1–5</b></li>
+    </ul>
+    <ol class="where" aria-label="Where this chapter sits in the guide">
+      <li class="past"><span>Part 1</span>Foundations</li>
+      <li class="past"><span>Part 2</span>Thinking &amp; memory</li>
+      <li class="past"><span>Part 3</span>The harness</li>
+      <li class="here"><span>Part 4</span>Multi-agent</li>
+      <li><span>Part 5</span>Together</li>
+    </ol>
+  </header>
+
+  <details class="toc-mobile"><summary>In this chapter</summary><div data-toc></div></details>
+
+  <div class="box predict">
+    <span class="box-label">Predict first · 10 min</span>
+    <p>Write answers in <code>docs/LEARNING_NOTES.md</code> under “Guide ch16”. Tag each one <em>sure</em> or <em>guess</em>.</p>
+    <ol>
+      <li>A model asks to spawn a child at depth 7. Who should decide whether that is allowed: the model, the child, or the harness? Why?</li>
+      <li>List everything a newly created child needs to know before its first model call.</li>
+      <li>A child fails. Should its parent fail too? What would you need to know to decide?</li>
+      <li>Each agent may spawn up to 10 children, and the tree may be 3 levels deep below the root. How many agents is that at most?</li>
+    </ol>
+  </div>
+
+  <h2 id="big-idea">The big idea</h2>
+  <p>In your harness, an agent does not “decide to become many agents”. It makes a <strong>tool call</strong>. One of the tools it has is <code>spawn_agent</code>, and calling it is a <em>request</em>. The harness checks the request against limits, creates the child, runs it, and hands the child's result back to the parent as an ordinary <code>tool_result</code>. From the parent model's point of view, a subagent is a slow, expensive tool that happens to think.</p>
+  <p>This framing matters because it puts every multi-agent question into a place you already understand: a tool call has a schema (what the parent may ask for), an executor (what the harness does), and a result (what comes back). Recursion is just the child having the same tool.</p>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>The model proposes, the harness disposes.</strong> The model decides <em>whether</em> to delegate and <em>what</em> to delegate. The harness decides whether the request is allowed, assigns the child's identity, depth and budget, and enforces every limit. Anything the model sets can be wrong; anything the harness sets is a guarantee.</p>
+  </div>
+
+  <h2 id="as-tool" data-short="Subagent as a tool">Subagent as a tool</h2>
+
+  <figure class="fig"><div class="fig-frame">
+    <svg class="dg wide" viewBox="0 0 720 270" role="img" aria-label="Inside the parent agent loop, the model emits tool calls. The harness dispatcher routes web_search to an ordinary tool executor and spawn_agent to the spawner. The spawner starts a child agent loop, which is the same loop code with new state. The child's return travels back to the dispatcher and reaches the parent model as a tool_result.">
+      <defs>
+        <marker id="f161-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="f161-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect x="20" y="20" width="350" height="230" rx="8" class="n-group"/>
+      <text x="34" y="40" class="t-sm t-muted">parent agent loop</text>
+      <rect x="40" y="56" width="140" height="48" rx="6" class="n-thick"/>
+      <text x="110" y="78" text-anchor="middle" class="t-b">Model</text>
+      <text x="110" y="95" text-anchor="middle" class="t-xs t-muted">emits tool_use blocks</text>
+      <rect x="40" y="160" width="310" height="48" rx="6"/>
+      <text x="195" y="182" text-anchor="middle" class="t-b">Harness dispatcher</text>
+      <text x="195" y="199" text-anchor="middle" class="t-xs t-muted">routes each tool_use by name</text>
+      <line x1="90" y1="104" x2="90" y2="158" marker-end="url(#f161-ah)"/>
+      <text x="98" y="136" class="t-xs">tool_use</text>
+      <line x1="150" y1="158" x2="150" y2="106" class="e-accent" marker-end="url(#f161-aha)"/>
+      <text x="158" y="136" class="t-xs t-accent">tool_result</text>
+
+      <rect x="420" y="40" width="130" height="40" rx="6"/>
+      <text x="485" y="65" text-anchor="middle" class="t-mono">web_search</text>
+      <rect x="420" y="150" width="130" height="48" rx="6" class="n-accent"/>
+      <text x="485" y="171" text-anchor="middle" class="t-mono">spawn_agent</text>
+      <text x="485" y="188" text-anchor="middle" class="t-xs">→ the spawner</text>
+      <line x1="300" y1="160" x2="418" y2="66" marker-end="url(#f161-ah)"/>
+      <line x1="350" y1="174" x2="418" y2="174" marker-end="url(#f161-ah)"/>
+
+      <rect x="590" y="130" width="120" height="88" rx="8" class="n-thick"/>
+      <text x="650" y="154" text-anchor="middle" class="t-b">Child loop</text>
+      <text x="650" y="172" text-anchor="middle" class="t-xs t-muted">same code,</text>
+      <text x="650" y="186" text-anchor="middle" class="t-xs t-muted">new state, own</text>
+      <text x="650" y="200" text-anchor="middle" class="t-xs t-muted">context window</text>
+      <line x1="550" y1="174" x2="588" y2="174" marker-end="url(#f161-ah)"/>
+      <polyline points="650,218 650,240 280,240 280,210" class="e-accent" marker-end="url(#f161-aha)"/>
+      <text x="470" y="234" text-anchor="middle" class="t-xs t-accent">the child's return becomes the parent's tool_result</text>
+      <text x="650" y="120" text-anchor="middle" class="t-xs t-muted">may call spawn_agent too</text>
+    </svg></div>
+    <figcaption><b>Figure 16.1</b> Spawning is a tool. The parent model cannot tell, structurally, the difference between a search and a subagent: both are tool calls with results. Recursion appears when the child's tool list also contains <code>spawn_agent</code>.</figcaption>
+  </figure>
+
+  <p>Frameworks use the same shape. The OpenAI Agents SDK can turn an agent into a tool with <code>as_tool()</code>; Claude Code exposes subagents to its main agent through a tool. Chapter 15's distinction applies: this is agent-as-tool, so control <em>returns</em> to the parent. A handoff would never come back.</p>
+
+  <p>What should the spawn tool's input look like? Here is one possible shape, written as the JSON Schema the model would see. It is an illustration to argue with, not a recommendation:</p>
+  <div class="code-label">A possible spawn_agent definition (illustrative; the // notes are annotations, not JSON)</div>
+<pre><code>{
+  <span class="s">"name"</span>: <span class="s">"spawn_agent"</span>,
+  <span class="s">"description"</span>: <span class="s">"Delegate one self-contained subtask to a new agent. Returns its result."</span>,
+  <span class="s">"input_schema"</span>: {
+    <span class="s">"type"</span>: <span class="s">"object"</span>,
+    <span class="s">"properties"</span>: {
+      <span class="s">"objective"</span>:       { <span class="s">"type"</span>: <span class="s">"string"</span> },  <span class="c">// what done looks like</span>
+      <span class="s">"context"</span>:         { <span class="s">"type"</span>: <span class="s">"string"</span> },  <span class="c">// what the child must know</span>
+      <span class="s">"tools"</span>:           { <span class="s">"type"</span>: <span class="s">"array"</span>, <span class="s">"items"</span>: { <span class="s">"enum"</span>: [<span class="s">"web_search"</span>, <span class="s">"fetch_url"</span>] } },
+      <span class="s">"expected_output"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span> },  <span class="c">// format of the return</span>
+      <span class="s">"must_succeed"</span>:    { <span class="s">"type"</span>: <span class="s">"boolean"</span> }  <span class="c">// can the parent finish without it?</span>
+    },
+    <span class="s">"required"</span>: [<span class="s">"objective"</span>, <span class="s">"expected_output"</span>]
+  }
+}</code></pre>
+  <p>Notice what is <em>not</em> there: no <code>depth</code>, no <code>budget</code>, no <code>id</code>. If the model could set its child's depth, a confused model could reset it to zero and recurse forever.</p>
+
+  <div class="box stop">
+    <span class="box-label">Checkpoint · Round 2, question 2</span>
+    <p>Stop here if Round 2 question 2 is still open in your notes. Which way will you run a child (separate process, thread, coroutine or plain function call), and why? What is the difference between <em>creating</em> a child and <em>running</em> it? Who decides that a child should exist, and who enforces the limits? Write your answer first; the next section will otherwise do your thinking for you.</p>
+  </div>
+
+  <h2 id="lifecycle">The spawn lifecycle</h2>
+  <p>Between the model asking for a child and the parent receiving its result, eight things happen. Most bugs in recursive systems come from doing them in the wrong order or skipping one.</p>
+
+  <figure class="fig"><div class="fig-frame">
+    <svg class="dg xwide" viewBox="0 0 760 310" role="img" aria-label="Swimlane diagram with three lanes. In the parent model lane: 1 propose, and later 8 aggregate. In the harness lane: 2 validate, 3 create, 4 register, 5 schedule, and later 7 return. In the child lane: 6 run. A rejected request at validate goes back to the parent as an error observation.">
+      <defs>
+        <marker id="f162-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="f162-ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="ah-red" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect x="10" y="16" width="740" height="84" rx="6" class="n-group"/>
+      <text x="20" y="32" class="t-xs t-caps t-muted">parent's model · decides</text>
+      <rect x="10" y="110" width="740" height="84" rx="6" class="n-group"/>
+      <text x="20" y="126" class="t-xs t-caps t-muted">harness · enforces</text>
+      <rect x="10" y="204" width="740" height="84" rx="6" class="n-group"/>
+      <text x="20" y="220" class="t-xs t-caps t-muted">child agent · works</text>
+
+      <rect x="30" y="44" width="84" height="44" rx="6" class="n-accent"/><text x="72" y="63" text-anchor="middle" class="t-sm t-b">1 propose</text><text x="72" y="79" text-anchor="middle" class="t-xs">spawn_agent</text>
+      <rect x="134" y="138" width="84" height="44" rx="6" class="n-amber"/><text x="176" y="157" text-anchor="middle" class="t-sm t-b">2 validate</text><text x="176" y="173" text-anchor="middle" class="t-xs">schema, limits</text>
+      <rect x="238" y="138" width="84" height="44" rx="6"/><text x="280" y="157" text-anchor="middle" class="t-sm t-b">3 create</text><text x="280" y="173" text-anchor="middle" class="t-xs">id, depth, budget</text>
+      <rect x="342" y="138" width="84" height="44" rx="6"/><text x="384" y="157" text-anchor="middle" class="t-sm t-b">4 register</text><text x="384" y="173" text-anchor="middle" class="t-xs">tree, counters</text>
+      <rect x="446" y="138" width="84" height="44" rx="6"/><text x="488" y="157" text-anchor="middle" class="t-sm t-b">5 schedule</text><text x="488" y="173" text-anchor="middle" class="t-xs">queue, semaphore</text>
+      <rect x="446" y="230" width="84" height="44" rx="6" class="n-thick"/><text x="488" y="249" text-anchor="middle" class="t-sm t-b">6 run</text><text x="488" y="265" text-anchor="middle" class="t-xs">its own loop</text>
+      <rect x="550" y="138" width="84" height="44" rx="6" class="n-amber"/><text x="592" y="157" text-anchor="middle" class="t-sm t-b">7 return</text><text x="592" y="173" text-anchor="middle" class="t-xs">check contract</text>
+      <rect x="654" y="44" width="84" height="44" rx="6" class="n-accent"/><text x="696" y="63" text-anchor="middle" class="t-sm t-b">8 aggregate</text><text x="696" y="79" text-anchor="middle" class="t-xs">use the result</text>
+
+      <polyline points="72,88 72,160 132,160" marker-end="url(#f162-ah)"/>
+      <line x1="218" y1="160" x2="236" y2="160" marker-end="url(#f162-ah)"/>
+      <line x1="322" y1="160" x2="340" y2="160" marker-end="url(#f162-ah)"/>
+      <line x1="426" y1="160" x2="444" y2="160" marker-end="url(#f162-ah)"/>
+      <line x1="488" y1="182" x2="488" y2="228" marker-end="url(#f162-ah)"/>
+      <polyline points="530,252 592,252 592,184" marker-end="url(#f162-ah)"/>
+      <polyline points="634,160 696,160 696,90" marker-end="url(#f162-ah)"/>
+      <polyline points="176,136 176,66 116,66" class="e-red e-dash" marker-end="url(#f162-ahr)"/>
+      <text x="184" y="60" class="t-xs t-red">rejected → is_error tool_result</text>
+      <text x="478" y="214" text-anchor="end" class="t-xs t-muted">steps 2–5 happen before any child token is spent</text>
+    </svg></div>
+    <figcaption><b>Figure 16.2</b> The eight steps of a spawn, by who owns them. The model owns only the first and last. The harness owns the middle, which is why the harness, not the prompt, is where limits live.</figcaption>
+  </figure>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th>Step</th><th>Question it answers</th><th>If you skip it</th></tr></thead>
+    <tbody>
+      <tr><td><strong>1 Propose</strong></td><td>Does the parent want help, and with what?</td><td>(Nothing to skip: this is the model's call.)</td></tr>
+      <tr><td><strong>2 Validate</strong></td><td>Is the request well formed, and allowed by every limit?</td><td>A malformed or over-limit request becomes a real agent.</td></tr>
+      <tr><td><strong>3 Create</strong></td><td>What is the child's identity, depth, budget and tool set?</td><td>No stable id to trace, no depth to check next time.</td></tr>
+      <tr><td><strong>4 Register</strong></td><td>Does the run's state know this child exists?</td><td>Counters lag behind reality; two concurrent spawns both pass a limit check.</td></tr>
+      <tr><td><strong>5 Schedule</strong></td><td>When may it start, given concurrency limits?</td><td>Fifty children hit the API at once and all get rate-limited.</td></tr>
+      <tr><td><strong>6 Run</strong></td><td>The child's own agent loop.</td><td>(The point of the exercise.)</td></tr>
+      <tr><td><strong>7 Return</strong></td><td>Does the result meet the return contract?</td><td>The parent receives garbage it cannot tell from a real answer.</td></tr>
+      <tr><td><strong>8 Aggregate</strong></td><td>How does this result combine with the others?</td><td>Results are pasted together and the parent's window fills up.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Create is not run</h3>
+  <p>Steps 3 and 6 are separated on purpose. <em>Creating</em> a child means building its record: an id, a parent id, a depth, a budget, a status of <code>pending</code>. <em>Running</em> it means starting its loop. The gap between them is where the harness does its checking and where cancelling costs nothing, because nothing has been spent yet.</p>
+  <p>In Python's <code>asyncio</code> the same gap exists at a lower level: calling a coroutine function only builds a coroutine object; <code>asyncio.create_task</code> schedules it; it actually starts executing only when the event loop next gets control. If your limit check reads a counter, then awaits something, then increments the counter, two siblings can both pass the check in that window. That is chapter 10's check-then-act race, and it is why step 4 (register) belongs before any <code>await</code>. See <a href="10-concurrency.html">chapter 10</a>.</p>
+
+  <h2 id="payload" data-short="What a child receives">What a child receives, and what it returns</h2>
+  <p>A child starts with an empty context window. Everything it knows comes from what the spawn gives it; everything the parent learns comes from what the child sends back. These two envelopes are the whole interface, so design them as carefully as you would an API.</p>
+
+  <figure class="fig"><div class="fig-frame">
+    <svg class="dg wide" viewBox="0 0 720 340" role="img" aria-label="Left: the inbound envelope. Proposed by the parent's model: objective, context slice, requested tools, expected output, must_succeed. Assigned by the harness: id and parent id, depth equal to parent depth plus one, budget, tools as the intersection of requested and parent's tools, deadline. Centre: the child agent. Right: the return contract: status, result, provenance, usage, gaps. The harness adds ids, timings and the span.">
+      <defs>
+        <marker id="f163-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <text x="20" y="20" class="t-b">In: the spawn</text>
+      <text x="20" y="40" class="t-xs t-accent">proposed by the parent's model</text>
+      <rect x="20" y="48" width="250" height="24" rx="4" class="n-accent"/><text x="30" y="64" class="t-sm">objective: what “done” means</text>
+      <rect x="20" y="76" width="250" height="24" rx="4" class="n-accent"/><text x="30" y="92" class="t-sm">context slice: what it must know</text>
+      <rect x="20" y="104" width="250" height="24" rx="4" class="n-accent"/><text x="30" y="120" class="t-sm">requested tools</text>
+      <rect x="20" y="132" width="250" height="24" rx="4" class="n-accent"/><text x="30" y="148" class="t-sm">expected output format</text>
+      <rect x="20" y="160" width="250" height="24" rx="4" class="n-accent"/><text x="30" y="176" class="t-sm">must_succeed (required or optional)</text>
+      <text x="20" y="206" class="t-xs t-violet">assigned by the harness (never by a model)</text>
+      <rect x="20" y="214" width="250" height="24" rx="4" class="n-violet"/><text x="30" y="230" class="t-sm">id, parent_id</text>
+      <rect x="20" y="242" width="250" height="24" rx="4" class="n-violet"/><text x="30" y="258" class="t-sm">depth = parent's depth + 1</text>
+      <rect x="20" y="270" width="250" height="24" rx="4" class="n-violet"/><text x="30" y="286" class="t-sm">budget (a slice, or a pool handle)</text>
+      <rect x="20" y="298" width="250" height="24" rx="4" class="n-violet"/><text x="30" y="314" class="t-sm">tools = requested ∩ parent's; deadline</text>
+
+      <rect x="300" y="140" width="120" height="80" rx="8" class="n-thick"/>
+      <text x="360" y="174" text-anchor="middle" class="t-b">Child</text>
+      <text x="360" y="192" text-anchor="middle" class="t-xs t-muted">empty window</text>
+      <text x="360" y="206" text-anchor="middle" class="t-xs t-muted">at start</text>
+      <line x1="272" y1="180" x2="298" y2="180" marker-end="url(#f163-ah)"/>
+      <line x1="420" y1="180" x2="448" y2="180" marker-end="url(#f163-ah)"/>
+
+      <text x="450" y="20" class="t-b">Out: the return contract</text>
+      <text x="450" y="40" class="t-xs t-amber">written by the child, checked at step 7</text>
+      <rect x="450" y="48" width="250" height="24" rx="4" class="n-amber"/><text x="460" y="64" class="t-sm">status: ok · partial · failed · …</text>
+      <rect x="450" y="76" width="250" height="24" rx="4" class="n-amber"/><text x="460" y="92" class="t-sm">result, in the expected format</text>
+      <rect x="450" y="104" width="250" height="24" rx="4" class="n-amber"/><text x="460" y="120" class="t-sm">provenance: sources, evidence</text>
+      <rect x="450" y="132" width="250" height="24" rx="4" class="n-amber"/><text x="460" y="148" class="t-sm">gaps: what it couldn't do, and why</text>
+      <text x="450" y="206" class="t-xs t-violet">added by the harness</text>
+      <rect x="450" y="214" width="250" height="24" rx="4" class="n-violet"/><text x="460" y="230" class="t-sm">usage: tokens, time, children spawned</text>
+      <rect x="450" y="242" width="250" height="24" rx="4" class="n-violet"/><text x="460" y="258" class="t-sm">ids, span, terminal state</text>
+      <text x="575" y="300" text-anchor="middle" class="t-xs t-muted">never trust a model's own report</text>
+      <text x="575" y="314" text-anchor="middle" class="t-xs t-muted">of how many tokens it used</text>
+    </svg></div>
+    <figcaption><b>Figure 16.3</b> The two envelopes, coloured by who writes each field. Teal is the parent model's request. Violet is the harness's guarantee. Amber is the child's claim, which the harness validates but cannot verify for truth. The tool intersection stops a child from gaining tools its parent never had (chapter 12).</figcaption>
+  </figure>
+
+  <h3>Why status needs more than “success”</h3>
+  <p>A boolean throws away the difference between “I finished”, “I got halfway and ran out of budget” and “I crashed”. The parent's next move differs in each case: use the result, use what there is and note the gap, or retry or carry on without it. A useful set of terminal states is <code>ok</code>, <code>partial</code>, <code>failed</code>, <code>timeout</code>, <code>over_budget</code> and <code>cancelled</code>. Notice that the last three are set by the harness, not by the child: a child that has been cancelled cannot report it.</p>
+
+  <div class="box pitfall">
+    <span class="box-label">Pitfall</span>
+    <p>Returning <code>status: ok</code> with an answer the child made up because it couldn't find one. An explicit <code>gaps</code> field, plus a prompt that rewards admitting gaps, gives the child a respectable alternative to inventing something. Provenance gives the parent a way to check.</p>
+  </div>
+
+  <h2 id="context-passing" data-short="Context passing">Context passing and the telephone game</h2>
+  <p>How much of what the parent knows should go into the child's brief? And how much of what the child found should come back? There are three broad answers.</p>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th>Strategy</th><th>What moves</th><th>Strength</th><th>Weakness</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Full</strong></td><td>The whole history (Cognition's “share full traces”)</td><td>Nothing is lost; implicit decisions are visible</td><td>Defeats context isolation; cost grows with depth</td></tr>
+      <tr><td><strong>Distilled</strong></td><td>A written brief down, a summary up</td><td>Small, focused windows</td><td>Lossy at every level; the writer decides what matters</td></tr>
+      <tr><td><strong>Reference</strong></td><td>A summary plus a pointer to full findings in a shared store</td><td>Small by default, complete on demand</td><td>Needs a store, ids and a tool to read it</td></tr>
+    </tbody>
+  </table></div>
+
+  <figure class="fig"><div class="fig-frame">
+    <svg class="dg wide" viewBox="0 0 720 300" role="img" aria-label="Top row: summaries of summaries. Sources contain 40 facts; the depth 2 agent's summary keeps 12; the depth 1 summary keeps 5; the root sees 3. Bars are drawn to scale. Bottom row: summary plus reference. Each level writes full findings to a shared store and passes a summary and a pointer upward; the root can open the store when it needs detail.">
+      <defs>
+        <marker id="f164-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="f164-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <text x="20" y="20" class="t-b">Summaries of summaries</text>
+      <rect x="20" y="34" width="150" height="36" rx="6" class="n-sunken"/><text x="95" y="57" text-anchor="middle" class="t-sm">sources</text>
+      <rect x="200" y="34" width="150" height="36" rx="6"/><text x="275" y="57" text-anchor="middle" class="t-sm">depth 2 agent</text>
+      <rect x="380" y="34" width="150" height="36" rx="6"/><text x="455" y="57" text-anchor="middle" class="t-sm">depth 1 agent</text>
+      <rect x="560" y="34" width="140" height="36" rx="6" class="n-thick"/><text x="630" y="57" text-anchor="middle" class="t-sm">root</text>
+      <line x1="170" y1="52" x2="198" y2="52" marker-end="url(#f164-ah)"/>
+      <line x1="350" y1="52" x2="378" y2="52" marker-end="url(#f164-ah)"/>
+      <line x1="530" y1="52" x2="558" y2="52" marker-end="url(#f164-ah)"/>
+      <rect x="20" y="82" width="160" height="14" class="fill-muted"/><text x="20" y="112" class="t-xs">40 facts</text>
+      <rect x="200" y="82" width="48" height="14" class="fill-accent"/><text x="200" y="112" class="t-xs">12 kept</text>
+      <rect x="380" y="82" width="20" height="14" class="fill-amber"/><text x="380" y="112" class="t-xs">5 kept</text>
+      <rect x="560" y="82" width="12" height="14" class="fill-red"/><text x="560" y="112" class="t-xs">3 reach the root</text>
+      <text x="360" y="128" text-anchor="middle" class="t-xs t-muted">each level keeps what it thinks matters, in its own words;</text>
+      <text x="360" y="142" text-anchor="middle" class="t-xs t-muted">an error added at depth 2 arrives at the root as confident prose</text>
+
+      <line x1="20" y1="152" x2="700" y2="152" class="e-muted e-dash"/>
+
+      <text x="20" y="176" class="t-b">Summary + reference</text>
+      <rect x="200" y="190" width="150" height="36" rx="6"/><text x="275" y="213" text-anchor="middle" class="t-sm">depth 2 agent</text>
+      <rect x="380" y="190" width="150" height="36" rx="6"/><text x="455" y="213" text-anchor="middle" class="t-sm">depth 1 agent</text>
+      <rect x="560" y="190" width="140" height="36" rx="6" class="n-thick"/><text x="630" y="213" text-anchor="middle" class="t-sm">root</text>
+      <line x1="350" y1="208" x2="378" y2="208" marker-end="url(#f164-ah)"/>
+      <line x1="530" y1="208" x2="558" y2="208" marker-end="url(#f164-ah)"/>
+      <text x="364" y="186" text-anchor="middle" class="t-xs">summary + ref</text>
+      <text x="544" y="186" text-anchor="middle" class="t-xs">summary + ref</text>
+      <rect x="200" y="256" width="500" height="32" rx="6" class="n-group"/>
+      <text x="450" y="277" text-anchor="middle" class="t-sm">shared findings store (full notes, sources, keyed by agent id)</text>
+      <line x1="275" y1="226" x2="275" y2="254" marker-end="url(#f164-ah)"/>
+      <line x1="455" y1="226" x2="455" y2="254" marker-end="url(#f164-ah)"/>
+      <line x1="640" y1="254" x2="640" y2="228" class="e-accent e-dash" marker-end="url(#f164-aha)"/>
+      <text x="634" y="246" class="t-xs t-accent" text-anchor="end">read on demand</text>
+      <text x="20" y="212" class="t-xs t-muted">writes go down,</text>
+      <text x="20" y="226" class="t-xs t-muted">pointers go up</text>
+    </svg></div>
+    <figcaption><b>Figure 16.4</b> The telephone game, with fact counts drawn to scale (4 px per fact). Top: each level compresses the one below, so the root sees a summary of a summary. Bottom: each level stores its full findings and passes up a summary with a pointer, so detail is one read away. Anthropic's research system has subagents write outputs to a filesystem and pass lightweight references back for exactly this reason.</figcaption>
+  </figure>
+
+  <p>The telephone game is not only about losing facts. Each level also <em>re-frames</em>: it decides what the question was, which source is authoritative, and how confident to sound. A hedge (“one blog claims…”) at depth 2 can become a fact at depth 1 and a headline at the root. Provenance that travels with each claim is the antidote, which is why it is in the return contract.</p>
+
+  <div class="box stop">
+    <span class="box-label">Checkpoint · Round 2, question 3</span>
+    <p>Stop here if Round 2 question 3 is still open in your notes. Name at least three separate mechanisms that make a recursive run stop. Which one do you trust least, and why? Then work out by hand how many agents can exist with a fan-out of 10 and a depth of 3 below the root. Write the formula, not just the number. Only then read on.</p>
+  </div>
+
+  <h2 id="limits">Limits and the growth math</h2>
+  <p>If every agent may spawn up to <em>f</em> children, and the tree may go <em>d</em> levels below the root, the maximum number of agents is a geometric series: one root, <em>f</em> children, <em>f</em><sup>2</sup> grandchildren, and so on.</p>
+
+  <div class="formula">N<sub>max</sub> = 1 + f + f<sup>2</sup> + … + f<sup>d</sup> = (f<sup>d+1</sup> − 1) / (f − 1)</div>
+
+  <div class="table-wrap"><table class="compact">
+    <thead><tr><th>fan-out f</th><th>d = 1</th><th>d = 2</th><th>d = 3</th><th>d = 4</th></tr></thead>
+    <tbody>
+      <tr><td>2</td><td>3</td><td>7</td><td>15</td><td>31</td></tr>
+      <tr><td>3</td><td>4</td><td>13</td><td>40</td><td>121</td></tr>
+      <tr><td>5</td><td>6</td><td>31</td><td>156</td><td>781</td></tr>
+      <tr><td>10</td><td>11</td><td>111</td><td><strong>1,111</strong></td><td>11,111</td></tr>
+    </tbody>
+  </table></div>
+
+  <figure class="fig"><div class="fig-frame">
+    <svg class="dg wide" viewBox="0 0 720 200" role="img" aria-label="Bar chart to scale: maximum agents at depth 3 for fan-out 2 is 15, for fan-out 3 is 40, for fan-out 5 is 156, and for fan-out 10 is 1111.">
+      <text x="20" y="22" class="t-b">Maximum agents at depth 3 (to scale)</text>
+      <text x="140" y="56" text-anchor="end" class="t-sm">f = 2</text>
+      <rect x="150" y="44" width="7" height="18" class="fill-accent"/><text x="164" y="58" class="t-sm">15</text>
+      <text x="140" y="90" text-anchor="end" class="t-sm">f = 3</text>
+      <rect x="150" y="78" width="18" height="18" class="fill-accent"/><text x="175" y="92" class="t-sm">40</text>
+      <text x="140" y="124" text-anchor="end" class="t-sm">f = 5</text>
+      <rect x="150" y="112" width="70" height="18" class="fill-amber"/><text x="227" y="126" class="t-sm">156</text>
+      <text x="140" y="158" text-anchor="end" class="t-sm">f = 10</text>
+      <rect x="150" y="146" width="500" height="18" class="fill-red"/><text x="658" y="160" class="t-sm t-b">1,111</text>
+      <line x1="150" y1="36" x2="150" y2="172" class="e-line"/>
+      <text x="150" y="190" class="t-xs t-muted">at 20k tokens per agent, 1,111 agents is about 22 million tokens for one question</text>
+    </svg></div>
+    <figcaption><b>Figure 16.5</b> Depth and fan-out multiply. Doubling fan-out from 5 to 10 at depth 3 multiplies the worst case by about 7. Depth and fan-out limits alone bound the tree, but the bound is far too high to be the only protection.</figcaption>
+  </figure>
+
+  <p>No single limit is enough, because each one bounds a different thing. A real harness layers them:</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Limit</th><th>What it bounds</th><th>Checked at</th><th>When it's hit</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Max depth</strong></td><td>How deep the tree goes</td><td>2 validate</td><td>Reject the spawn; tell the model to do the work itself</td></tr>
+      <tr><td><strong>Max fan-out</strong></td><td>Children per agent</td><td>2 validate</td><td>Reject further spawns from that parent</td></tr>
+      <tr><td><strong>Max total agents</strong></td><td>The whole tree, whatever its shape</td><td>2 and 4, as one atomic step</td><td>Reject; the run is near its ceiling</td></tr>
+      <tr><td><strong>Token budget</strong></td><td>Money</td><td>3 (assign), then every model call</td><td>Stop the agent; return <code>over_budget</code> with what it has</td></tr>
+      <tr><td><strong>Deadline</strong></td><td>Wall-clock time</td><td>5 and 6 (timeouts)</td><td>Cancel; return <code>timeout</code></td></tr>
+      <tr><td><strong>Max concurrency</strong></td><td>Simultaneous API calls</td><td>5 schedule (a semaphore)</td><td>Wait in a queue; not an error</td></tr>
+      <tr><td><strong>Max steps per agent</strong></td><td>One loop's length</td><td>6 run</td><td>Force a final answer</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p>Prompt guidance (“use one subagent for simple questions”) shapes the <em>typical</em> run. Harness limits bound the <em>worst</em> run. You need both, and you should only trust the second. A rejected spawn should come back to the model as an error observation it can read and adapt to, not as a crash.</p>
+  </div>
+
+  <h2 id="budgets" data-short="Budget pools">Budgets: slices or a pool</h2>
+  <p>A token budget for the whole run has to be shared out somehow. There are two basic designs, and most real systems end up in between.</p>
+
+  <figure class="fig"><div class="fig-frame">
+    <svg class="dg wide" viewBox="0 0 720 250" role="img" aria-label="Left, slices: a parent with 100k tokens keeps 10k and gives A, B and C 30k each. A uses all 30k and hits its cap; B uses 12k and strands 18k; C uses 20k. Right, pool: one shared 100k counter; A draws 45k, B 12k, C 20k, and 23k is left. Bars drawn to scale.">
+      <text x="20" y="22" class="t-b">Slices</text>
+      <rect x="40" y="36" width="28" height="22" class="n-sunken"/><text x="54" y="51" text-anchor="middle" class="t-xs">10k</text>
+      <rect x="68" y="36" width="84" height="22" class="n-accent"/><text x="110" y="51" text-anchor="middle" class="t-xs">A 30k</text>
+      <rect x="152" y="36" width="84" height="22" class="n-violet"/><text x="194" y="51" text-anchor="middle" class="t-xs">B 30k</text>
+      <rect x="236" y="36" width="84" height="22" class="n-amber"/><text x="278" y="51" text-anchor="middle" class="t-xs">C 30k</text>
+      <text x="40" y="76" class="t-xs t-muted">parent's 100k, divided up front · then actual use:</text>
+      <text x="30" y="101" text-anchor="middle" class="t-sm">A</text>
+      <rect x="40" y="88" width="84" height="18" class="n-plain"/><rect x="40" y="88" width="84" height="18" class="fill-accent"/>
+      <text x="132" y="101" class="t-xs t-red">30k · hit its cap, returns partial</text>
+      <text x="30" y="129" text-anchor="middle" class="t-sm">B</text>
+      <rect x="40" y="116" width="84" height="18" class="n-plain"/><rect x="40" y="116" width="34" height="18" class="fill-violet"/>
+      <text x="132" y="129" class="t-xs">12k · 18k stranded</text>
+      <text x="30" y="157" text-anchor="middle" class="t-sm">C</text>
+      <rect x="40" y="144" width="84" height="18" class="n-plain"/><rect x="40" y="144" width="56" height="18" class="fill-amber"/>
+      <text x="132" y="157" class="t-xs">20k · 10k stranded</text>
+      <text x="40" y="186" class="t-sm">simple, predictable, no races;</text>
+      <text x="40" y="202" class="t-sm">B's spare tokens can't help A</text>
+
+      <line x1="370" y1="16" x2="370" y2="212" class="e-muted e-dash"/>
+
+      <text x="400" y="22" class="t-b">Pool</text>
+      <rect x="400" y="36" width="280" height="22" class="n-plain"/>
+      <rect x="400" y="36" width="126" height="22" class="n-accent"/><text x="463" y="51" text-anchor="middle" class="t-xs">A 45k</text>
+      <rect x="526" y="36" width="34" height="22" class="n-violet"/><text x="543" y="51" text-anchor="middle" class="t-xs">B</text>
+      <rect x="560" y="36" width="56" height="22" class="n-amber"/><text x="588" y="51" text-anchor="middle" class="t-xs">C 20k</text>
+      <text x="648" y="51" text-anchor="middle" class="t-xs t-muted">23k left</text>
+      <text x="400" y="76" class="t-xs t-muted">one shared 100k counter; every model call draws from it</text>
+      <text x="400" y="104" class="t-sm">A could use 45k because B needed little</text>
+      <text x="400" y="128" class="t-sm t-red">risk: A drains it before B even starts</text>
+      <text x="400" y="152" class="t-sm t-red">risk: check, await, spend → two agents</text>
+      <text x="400" y="168" class="t-sm t-red">overspend together (ch10's race)</text>
+      <text x="400" y="194" class="t-sm">flexible; needs reserve-then-spend</text>
+      <text x="400" y="210" class="t-sm">as one atomic step</text>
+
+      <text x="360" y="240" text-anchor="middle" class="t-sm t-muted">a common middle: one pool, a cap per child, and a reserve the parent keeps for synthesis</text>
+    </svg></div>
+    <figcaption><b>Figure 16.6</b> Slices vs a pool, to scale (2.8 px per thousand tokens). Slices waste what children don't use; a pool lets the first greedy child starve the rest. Either way, the parent must keep a reserve, or it can't afford to write the final answer after its children finish.</figcaption>
+  </figure>
+
+  <h2 id="required" data-short="Required vs optional">Required and optional children</h2>
+  <p>When a child fails, the parent's correct reaction depends on whether it could finish without that child. That's why <code>must_succeed</code> appears in the spawn request: the parent's model knows which parts of its plan are essential.</p>
+  <div class="cols-2">
+    <div class="card"><p><strong>Required child fails.</strong> The parent can retry (a new child with a clearer brief, not the same brief again), or fail itself with status <code>failed</code> and a reason that names the child. A retry costs budget, so it should be counted against the same limits.</p></div>
+    <div class="card"><p><strong>Optional child fails.</strong> The parent carries on, and records the hole in its own <code>gaps</code> field. The final answer should say what is missing, rather than quietly covering less ground.</p></div>
+  </div>
+  <p>The harness can add a policy on top of the model's choice, for example “if more than half of a parent's children fail, the parent fails”. Ask yourself which of these should be fixed in code and which should be left to the model.</p>
+
+  <h2 id="aggregation">Aggregation</h2>
+  <p>Step 8 turns several results into one. In a recursive tree it happens at <em>every</em> level, because each parent aggregates its own children before returning, so its design compounds with depth.</p>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th>Strategy</th><th>How</th><th>Cost</th><th>What it loses</th><th>Use when</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Concatenate</strong></td><td>Paste results in order</td><td>None</td><td>Nothing, but the parent's window fills</td><td>Few, short results</td></tr>
+      <tr><td><strong>Merge</strong></td><td>Combine structured fields in code; de-duplicate by key</td><td>Cheap, deterministic</td><td>Conflicts need a rule (newest? best source?)</td><td>Results share a schema, such as lists of facts with sources</td></tr>
+      <tr><td><strong>Synthesize</strong></td><td>One more model call writes a single answer from all inputs</td><td>One large call</td><td>Nuance; it may invent connections between sources</td><td>A prose answer, such as your RAG explanation</td></tr>
+      <tr><td><strong>Vote</strong></td><td>Majority or judge among duplicate attempts</td><td>k × the work</td><td>A minority answer that was right</td><td>Several attempts at the <em>same</em> question</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="box pitfall">
+    <span class="box-label">Pitfall</span>
+    <p>Synthesizing in the same call that does the parent's other work. If the parent's window already holds its own research plus every child's result, synthesis quality falls for the reasons in chapter 06. Merging in code first, then synthesizing from the merged, de-duplicated version, keeps that final call small.</p>
+  </div>
+
+  <h2 id="termination">Termination</h2>
+  <p>A run has ended only when <em>every</em> agent in it has reached exactly one terminal state. The root returning its answer is not enough: a child still running after its parent has returned is an <strong>orphan</strong>. It keeps spending budget and its result goes nowhere.</p>
+
+  <figure class="fig"><div class="fig-frame">
+    <svg class="dg wide" viewBox="0 0 720 260" role="img" aria-label="Left: a finished tree in which every node has a terminal state. Root ok; child A ok; child B partial, with grandchild B1 timed out and B2 ok; child C cancelled at the deadline. Right: the bug. Parent P has returned, but its child X is still running, spending budget, and no one will read its result.">
+      <defs>
+        <marker id="f167-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="f167-ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="ah-red" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <text x="20" y="20" class="t-b">Correct: every node terminal</text>
+      <rect x="170" y="32" width="120" height="36" rx="6" class="n-accent n-thick"/><text x="230" y="55" text-anchor="middle" class="t-sm">root · ok</text>
+      <rect x="30" y="110" width="110" height="36" rx="6" class="n-accent"/><text x="85" y="133" text-anchor="middle" class="t-sm">A · ok</text>
+      <rect x="175" y="110" width="110" height="36" rx="6" class="n-amber"/><text x="230" y="133" text-anchor="middle" class="t-sm">B · partial</text>
+      <rect x="320" y="110" width="120" height="36" rx="6" class="n-sunken"/><text x="380" y="133" text-anchor="middle" class="t-sm">C · cancelled</text>
+      <rect x="120" y="190" width="110" height="36" rx="6" class="n-amber"/><text x="175" y="213" text-anchor="middle" class="t-sm">B1 · timeout</text>
+      <rect x="250" y="190" width="100" height="36" rx="6" class="n-accent"/><text x="300" y="213" text-anchor="middle" class="t-sm">B2 · ok</text>
+      <line x1="200" y1="68" x2="95" y2="108" marker-end="url(#f167-ah)"/>
+      <line x1="230" y1="68" x2="230" y2="108" marker-end="url(#f167-ah)"/>
+      <line x1="260" y1="68" x2="370" y2="108" marker-end="url(#f167-ah)"/>
+      <line x1="215" y1="146" x2="180" y2="188" marker-end="url(#f167-ah)"/>
+      <line x1="245" y1="146" x2="295" y2="188" marker-end="url(#f167-ah)"/>
+      <text x="230" y="248" text-anchor="middle" class="t-xs t-muted">B is partial because optional B1 timed out; C was cancelled at the deadline</text>
+
+      <line x1="460" y1="16" x2="460" y2="232" class="e-muted e-dash"/>
+
+      <text x="480" y="20" class="t-b t-red">The bug: an orphan</text>
+      <rect x="520" y="40" width="140" height="36" rx="6" class="n-sunken"/><text x="590" y="63" text-anchor="middle" class="t-sm">P · returned</text>
+      <rect x="520" y="130" width="140" height="36" rx="6" class="n-red"/><text x="590" y="153" text-anchor="middle" class="t-sm">X · still running</text>
+      <line x1="590" y1="76" x2="590" y2="128" class="e-red e-dash" marker-end="url(#f167-ahr)"/>
+      <text x="590" y="190" text-anchor="middle" class="t-xs t-red">still spending budget;</text>
+      <text x="590" y="204" text-anchor="middle" class="t-xs t-red">its result has nowhere to go</text>
+    </svg></div>
+    <figcaption><b>Figure 16.7</b> Termination. A run is over when every node has one terminal state and no parent reached its own before its children reached theirs. Cancellation flows down the tree; results flow up.</figcaption>
+  </figure>
+
+  <p>Two rules prevent orphans:</p>
+  <ol>
+    <li><strong>A parent cannot finish while any child is still running.</strong> It must wait for each child, or cancel it, before it returns.</li>
+    <li><strong>Cancelling a parent cancels its whole subtree.</strong> A deadline at the root must reach every leaf.</li>
+  </ol>
+  <p>This is <em>structured concurrency</em>: the lifetime of every task is nested inside the lifetime of the task that started it. Python 3.11's <code>asyncio.TaskGroup</code> enforces it for a group of tasks: the block cannot exit until all its tasks are done, and if one fails with an exception the others are cancelled. Whether “one child failed, cancel its siblings” is the behaviour you <em>want</em> for optional children is a design question, not a library default to accept unexamined.</p>
+
+  <h2 id="trace" data-short="Worked trace">A worked trace: Experiment 001</h2>
+  <p>Here is one plausible run of your Experiment 001 question, with limits of depth 2, fan-out 4, 12 agents in total and a 150k-token pool. It is invented to show the lifecycle, not a prediction of what your harness will do. Read the <em>sys</em> lines closely: they are the harness disposing.</p>
+
+  <div class="trace">
+    <div class="trace-title">run 001 · max_depth 2 · max_fanout 4 · max_agents 12 · pool 150k tokens</div>
+    <div class="tr tr-user"><span class="tr-role">user</span><div class="tr-body">Explain the architecture of a modern RAG system.</div></div>
+    <div class="tr tr-think"><span class="tr-role">root · think</span><div class="tr-body">Wide question with separable parts: ingestion, retrieval, generation and evaluation. Three children. Retrieval is the deepest part.</div></div>
+    <div class="tr tr-act"><span class="tr-role">root · act</span><div class="tr-body"><code>spawn_agent</code> × 3 (in one turn): “Ingestion: chunking, embedding, indexing” (must_succeed) · “Retrieval: dense, sparse, hybrid, reranking” (must_succeed) · “Generation and evaluation: prompting with context, citations, RAG metrics” (optional)</div></div>
+    <div class="tr tr-sys"><span class="tr-role">harness</span><div class="tr-body">3 spawns valid. Created c1, c2, c3 at depth 1; agents 4 / 12. Root keeps a 30k synthesis reserve; children draw from the remaining pool with a 40k cap each. Scheduled concurrently.</div></div>
+    <div class="tr tr-think"><span class="tr-role">c2 · think</span><div class="tr-body">Approximate-nearest-neighbour index types are a large subtopic of their own. Delegate it.</div></div>
+    <div class="tr tr-act"><span class="tr-role">c2 · act</span><div class="tr-body"><code>spawn_agent</code>: “Compare ANN index types (HNSW, IVF, product quantization): recall, latency, memory” (must_succeed)</div></div>
+    <div class="tr tr-sys"><span class="tr-role">harness</span><div class="tr-body">Valid. Created g1 at depth 2, parent c2; agents 5 / 12; cap 15k. Tools: <code>web_search</code>, <code>fetch_url</code> (the intersection with c2's).</div></div>
+    <div class="tr tr-act"><span class="tr-role">g1 · act</span><div class="tr-body"><code>spawn_agent</code>: “Explain how HNSW's layered graph works”</div></div>
+    <div class="tr tr-sys"><span class="tr-role">harness</span><div class="tr-body">Rejected: depth 3 exceeds max_depth 2. Returned to g1 as an error tool_result: “Spawning is not available at this depth. Do this part yourself, or record it under gaps.”</div></div>
+    <div class="tr tr-obs"><span class="tr-role">g1 · return</span><div class="tr-body">status ok · comparison table of 3 index types · 4 sources · 11.2k tokens</div></div>
+    <div class="tr tr-obs"><span class="tr-role">c1 · return</span><div class="tr-body">status ok · ingestion summary · 5 sources · 24.0k tokens</div></div>
+    <div class="tr tr-obs"><span class="tr-role">c3 · return</span><div class="tr-body">status timeout (set by the harness at its 120 s deadline) · the generation section it had finished was kept; “RAG metrics” recorded as a gap · 31.5k tokens</div></div>
+    <div class="tr tr-obs"><span class="tr-role">c2 · return</span><div class="tr-body">status ok · retrieval summary, g1's table merged in · 6 sources · 28.4k tokens (own use)</div></div>
+    <div class="tr tr-sys"><span class="tr-role">harness</span><div class="tr-body">All 4 children terminal; no orphans. Pool used 95.1k before synthesis. Root resumes.</div></div>
+    <div class="tr tr-final"><span class="tr-role">root · final</span><div class="tr-body">A structured explanation in four sections with 15 cited sources, plus a note: “Evaluation metrics are covered only briefly: that subtask timed out.” Total 109k tokens, 5 agents, depth reached 2.</div></div>
+  </div>
+
+  <p>Now read it again as a critic. Where did a summary of a summary happen? Did the root's plan get checked by anyone? Was c3 worth spawning, or should optional work start later? What would the single-agent baseline from chapter 14 have cost?</p>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Stage 1.</strong> Root plus three dummy children, no LLM yet. Which fields of Figure 16.3 can exist from day one? (Hint: look at what is violet.) Build those first; the blue fields can be fixed strings.</li>
+      <li><strong>Stage 2.</strong> Where exactly in your code is a child's depth computed? Can anything other than the harness change it after that? Write a test that tries.</li>
+      <li><strong>Stage 3.</strong> Find the await between your “is there room for another agent?” check and your “count it” step. How will you make a test with sleeping fake children that would fail if that race existed?</li>
+      <li><strong>Stage 3.</strong> Slices or a pool? Which one makes your tests simpler, and which makes Experiment 001 better? Must those be the same answer?</li>
+      <li><strong>Stage 4–5.</strong> Write the exact error text the model sees when a spawn is rejected. Does it tell the model what to do next?</li>
+      <li><strong>Stage 5.</strong> Choose an aggregation strategy for each level of Experiment 001. What does each one lose?</li>
+      <li><strong>Stage 6.</strong> How will you prove there were no orphans? What would you assert about the run's state after it ends?</li>
+    </ul>
+  </div>
+
+  <h2 id="check">Check yourself</h2>
+  <p>Answer each one out loud or on paper before you open it.</p>
+  <div class="quiz">
+    <details><summary><span class="tag recall">Recall</span> List the eight steps of the spawn lifecycle, and say who owns each.</summary><div><p>Propose (parent's model), validate, create, register, schedule (harness), run (child), return (harness checks the child's result), aggregate (parent's model, or code the parent calls).</p></div></details>
+    <details><summary><span class="tag recall">Recall</span> Why are depth, budget and id missing from the spawn tool's input?</summary><div><p>They are guarantees, so the harness must assign them. A model that could set its child's depth could reset it and recurse without bound; one that could set its own budget could exceed the run's.</p></div></details>
+    <details><summary><span class="tag apply">Apply</span> Fan-out 4, depth 3 below the root. Maximum number of agents?</summary><div><p>(4<sup>4</sup> − 1) / (4 − 1) = 255 / 3 = 85, that is 1 + 4 + 16 + 64.</p></div></details>
+    <details><summary><span class="tag apply">Apply</span> The total-agent cap is 20 and 19 exist. Two siblings request a spawn at the same moment. What can go wrong, and what fixes it?</summary><div><p>If each checks the count, then awaits something, then increments, both see 19 and both pass, giving 21. The check and the registration must happen together with no await between them (or under a lock), so the second request sees 20 and is rejected.</p></div></details>
+    <details><summary><span class="tag apply">Apply</span> With slices, a parent splits 90k into three equal parts. Child A needs 45k; B and C need 10k each. What happens, and what happens with a pool?</summary><div><p>Slices: A hits its 30k cap and returns partial, while B and C strand 20k each. Pool: A can take 45k, total use is 65k, and nothing is wasted, but if A had started first and needed 90k, it could have starved B and C. A per-child cap on a pool limits that.</p></div></details>
+    <details><summary><span class="tag design">Design</span> A required child times out. List the parent's options and what each costs.</summary><div><p>Retry with a new child and a clearer or smaller brief (more budget and time, counted against limits); do the work itself (fills its own window); or fail with a reason naming the child (honest, but the run produces less). Repeating the same brief to a fresh child usually repeats the failure.</p></div></details>
+    <details><summary><span class="tag interview">Interview</span> “How do you stop a recursive multi-agent system from running away?”</summary><div><p>Layered limits enforced by the harness, not the prompt: max depth, fan-out and total agents checked atomically at spawn time; a shared token budget with reservations; a root deadline that cancels the whole tree; a concurrency semaphore; max steps per agent. Rejections come back to the model as readable errors. Structured concurrency ensures no orphans, and a trace of the spawn tree makes runaway behaviour visible.</p></div></details>
+    <details><summary><span class="tag interview">Interview</span> Compare full, distilled and reference context passing.</summary><div><p>Full keeps every implicit decision visible but defeats context isolation and grows with depth. Distilled keeps windows small but loses information at every level (the telephone game). Reference passes a summary plus a pointer to complete findings in a shared store, small by default and complete on demand, at the cost of building and securing that store.</p></div></details>
+  </div>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><strong>J. Hadfield et al., “How we built our multi-agent research system”</strong> (Anthropic Engineering, June 2025).<span class="why">Subagents writing to a filesystem and passing references to avoid the “game of telephone”; effort scaling; parallel spawning.</span></li>
+    <li><strong>W. Yan, “Don't Build Multi-Agents”</strong> (Cognition, June 2025).<span class="why">The case for passing full context, and what distillation loses.</span></li>
+    <li><strong>Anthropic, Claude Code documentation: “Subagents”</strong>.<span class="why">A production example of subagents with their own context windows, prompts and tool lists, invoked through a tool.</span></li>
+    <li><strong>OpenAI Agents SDK documentation: “Tools” (agents as tools) and “Handoffs”</strong>.<span class="why">Both delegation styles side by side in one framework.</span></li>
+    <li><strong>N. J. Smith, “Notes on structured concurrency, or: Go statement considered harmful”</strong> (2018).<span class="why">Why task lifetimes should nest, and what goes wrong when they don't.</span></li>
+    <li><strong>Python documentation, <code>asyncio</code> “Task groups”</strong> (Python 3.11+).<span class="why">The standard-library version of structured concurrency you'll use in Stage 3.</span></li>
+  </ul>
+
+  <section class="recall-card" aria-labelledby="recall-16">
+    <h2 id="recall-16" data-short="Recall card">Recall card</h2>
+    <p class="muted small">Five lines to rehearse. If you can expand each into a minute of explanation, you know this chapter.</p>
+    <ol>
+      <li>Spawning is a tool call: the model proposes, the harness validates, creates, registers, schedules, runs, checks the return, and the parent aggregates.</li>
+      <li>Create is not run: the gap is where limits are checked atomically and cancelling is free.</li>
+      <li>The harness assigns id, depth, budget and the tool intersection; the child returns status, result, provenance and gaps.</li>
+      <li>N<sub>max</sub> = (f<sup>d+1</sup> − 1)/(f − 1): fan-out 10 at depth 3 is 1,111 agents. Layer limits; trust only the enforced ones.</li>
+      <li>Summaries of summaries play telephone; pass references. No parent finishes before its children: no orphans.</li>
+    </ol>
+  </section>
+
+  <div class="done">
+    <input type="checkbox" id="done-toggle" data-chapter="16">
+    <label for="done-toggle">I can explain this chapter without notes<small>Saved in this browser only. It updates the count on the guide's home page.</small></label>
+  </div>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="15-topologies.html"><small>Previous · Chapter 15</small>Multi-agent topologies</a>
+    <a class="next" href="17-communication.html"><small>Next · Chapter 17</small>Communication and coordination</a>
+  </nav>
+
+</main>
+<aside class="toc-rail" aria-label="On this page"><p class="toc-title">In this chapter</p><nav data-toc></nav></aside>
+</div>
+</body>
+</html>

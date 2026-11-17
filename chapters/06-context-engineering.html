@@ -1,0 +1,698 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Context Engineering · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar"><div class="topbar-inner">
+  <a class="brand" href="../index.html">Loop <span>→</span> Swarm</a>
+  <div class="crumbs"><a href="../index.html">Guide</a> · Part 2 · Thinking &amp; memory · Chapter 06</div>
+  <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+</div></header>
+
+<div class="page has-toc">
+<main class="chapter">
+  <header class="ch-head">
+    <p class="eyebrow"><b>Part 2 · Thinking &amp; memory</b> · Chapter 06 · Level L2</p>
+    <h1>Context engineering</h1>
+    <p class="lede">On every call, the model knows exactly what's in its context window and nothing else. Context engineering is deciding, call by call, which tokens go in, in what order, and which come out. In a long agent run it matters more than any single prompt you write.</p>
+    <ul class="ch-meta">
+      <li><b>50 min</b> reading</li>
+      <li>Builds on: <b>Ch 01, 03, 05</b></li>
+      <li>Your project: <b>Stage 4, Stage 5, Stage 6</b></li>
+    </ul>
+    <ol class="where" aria-label="Where this chapter sits in the guide">
+      <li class="past"><span>Part 1</span>Foundations</li>
+      <li class="here"><span>Part 2</span>Thinking &amp; memory</li>
+      <li><span>Part 3</span>The harness</li>
+      <li><span>Part 4</span>Multi-agent</li>
+      <li><span>Part 5</span>Together</li>
+    </ol>
+  </header>
+
+  <details class="toc-mobile"><summary>In this chapter</summary><div data-toc></div></details>
+
+  <div class="box predict">
+    <span class="box-label">Predict first · 10 min</span>
+    <p>Write answers in <code>docs/LEARNING_NOTES.md</code> under “Guide ch06”. Tag each one <em>sure</em> or <em>guess</em>. Don't read on until you're done.</p>
+    <ol>
+      <li>A coding agent is on step 12 and its request is 86K tokens. Guess what share of those tokens is the user's actual task, and what share is old tool output.</li>
+      <li>You put “Current time: 09:14:07” at the top of your system prompt. What happens to prompt caching, and why?</li>
+      <li>One agent runs 30 steps. Alternatively, a lead agent runs 6 steps and hands the rest to 3 sub-agents that run 8 steps each. Which uses fewer input tokens in total, and roughly by how much?</li>
+    </ol>
+  </div>
+
+  <h2 id="big-idea">The big idea</h2>
+  <p>Chapter 01 established that the model is stateless: the context window is its only memory. Chapter 05 showed that reasoning patterns are ways of arranging calls. This chapter is about the contents of each call. Your harness builds the context from scratch on every request, so every token in it is there because your code put it there.</p>
+  <p><em>Prompt engineering</em> is about writing one good set of instructions. <em>Context engineering</em> is the wider job in an agent loop: on every turn, choosing what the model sees from everything that <em>could</em> be in the window (instructions, tool definitions, history, tool results, retrieved documents, notes) and deciding what to drop as the run grows.</p>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>Find the smallest set of high-signal tokens that makes the right next step likely.</strong> This is the framing in Anthropic's “Effective context engineering for AI agents” (2025). Context is a budget, not a container. Each token you add costs money and time, and it competes for the model's attention with every token already there.</p>
+  </div>
+
+  <h2 id="anatomy" data-short="Anatomy of a window">Anatomy of a context window</h2>
+  <p>Here is one request from a realistic coding agent, twelve steps into a bug fix, drawn to scale against a 200K-token window. The numbers are illustrative, but the proportions are typical of agents that read files and run commands.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 760 266" role="img" aria-label="A 200K-token context window drawn to scale for step 12 of a coding agent. The request uses 86K: tool definitions 6K, system prompt 3K, project instructions 2K, the user's task 0.5K, assistant turns 9K, old tool results 64K and the latest turn 1.5K. 16K is reserved for output and 98K is unused. Old tool results are 74 percent of the input; the task is under 1 percent.">
+        <text class="t-b" x="30" y="16">One request at step 12 · 200K-token window, to scale</text>
+        <path class="e-muted" d="M30,44 V38 H331 V44"/>
+        <text class="t-sm" x="180" y="33" text-anchor="middle">in the request: 86K</text>
+        <path class="e-muted" d="M333,44 V38 H387 V44"/>
+        <text class="t-xs t-muted" x="360" y="33" text-anchor="middle">output 16K</text>
+        <path class="e-muted" d="M389,44 V38 H730 V44"/>
+        <text class="t-sm t-muted" x="560" y="33" text-anchor="middle">unused 98K</text>
+
+        <rect class="fill-violet" x="30" y="48" width="21" height="36"/>
+        <rect class="fill-accent" x="51" y="48" width="10.5" height="36"/>
+        <rect class="n-accent" x="61.5" y="48" width="7" height="36"/>
+        <rect class="fill-red" x="68.5" y="48" width="1.75" height="36"/>
+        <rect class="fill-muted" x="70.25" y="48" width="31.5" height="36"/>
+        <rect class="fill-amber" x="101.75" y="48" width="224" height="36"/>
+        <rect class="fill-fg" x="325.75" y="48" width="5.25" height="36"/>
+        <rect class="n-ghost" x="333" y="48" width="54" height="36"/>
+        <rect class="n-sunken" x="389" y="48" width="341" height="36"/>
+
+        <line class="e-line" x1="30" y1="86" x2="30" y2="92"/><text class="t-xs t-muted" x="30" y="104" text-anchor="middle">0</text>
+        <line class="e-line" x1="205" y1="86" x2="205" y2="92"/><text class="t-xs t-muted" x="205" y="104" text-anchor="middle">50K</text>
+        <line class="e-line" x1="380" y1="86" x2="380" y2="92"/><text class="t-xs t-muted" x="380" y="104" text-anchor="middle">100K</text>
+        <line class="e-line" x1="555" y1="86" x2="555" y2="92"/><text class="t-xs t-muted" x="555" y="104" text-anchor="middle">150K</text>
+        <line class="e-line" x1="730" y1="86" x2="730" y2="92"/><text class="t-xs t-muted" x="730" y="104" text-anchor="middle">200K</text>
+
+        <!-- legend, column 1 -->
+        <rect class="fill-violet" x="30" y="126" width="14" height="12"/>
+        <text class="t-sm" x="52" y="136">tool definitions · 6K</text>
+        <rect class="fill-accent" x="30" y="148" width="14" height="12"/>
+        <text class="t-sm" x="52" y="158">system prompt · 3K</text>
+        <rect class="n-accent" x="30" y="170" width="14" height="12"/>
+        <text class="t-sm" x="52" y="180">project instructions file · 2K</text>
+        <rect class="fill-red" x="30" y="192" width="14" height="12"/>
+        <text class="t-sm" x="52" y="202">the user's task · 0.5K (under 1%)</text>
+        <!-- legend, column 2 -->
+        <rect class="fill-muted" x="400" y="126" width="14" height="12"/>
+        <text class="t-sm" x="422" y="136">assistant turns (text and tool calls) · 9K</text>
+        <rect class="fill-amber" x="400" y="148" width="14" height="12"/>
+        <text class="t-sm t-b" x="422" y="158">old tool results · 64K (74% of the input)</text>
+        <rect class="fill-fg" x="400" y="170" width="14" height="12"/>
+        <text class="t-sm" x="422" y="180">latest turn · 1.5K</text>
+        <rect class="n-ghost" x="400" y="192" width="14" height="12"/>
+        <text class="t-sm" x="422" y="202">reserved for output (max_tokens) · 16K</text>
+
+        <text class="t-sm t-muted" x="30" y="236">The first 11.5K (tools, system, project file, task) is identical on every call. That's what the prompt cache reuses.</text>
+        <text class="t-sm t-muted" x="30" y="254">Most of the rest is file contents and command output from earlier steps. The model may never need it again.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 6.1</b>What fills the window. Compare this with your Predict answer 1. The task that started the run is a sliver. Old tool results dominate, and they're also the easiest thing to remove safely, because the tool calls that produced them stay visible and can be re-run.</figcaption>
+  </figure>
+
+  <dl class="defs">
+    <dt>Tool definitions</dt><dd>Name, description and JSON Schema for every tool, sent on every call. Twenty tools with detailed descriptions can take several thousand tokens before the conversation starts.</dd>
+    <dt>System prompt</dt><dd>Role, rules and output expectations. Anthropic's post recommends the “right altitude”: specific enough to guide behavior, general enough that it isn't a brittle list of if-then rules.</dd>
+    <dt>Project instructions</dt><dd>A file loaded at the start of every run, such as a <code>CLAUDE.md</code>. It's preloaded context (see “Just-in-time” below).</dd>
+    <dt>History</dt><dd>Every assistant turn and every tool result so far. It grows every step, and tool results are usually the biggest part.</dd>
+    <dt>Reserved output</dt><dd>Space for the response. Input plus <code>max_tokens</code> must fit in the window, so the usable input space is smaller than the advertised window.</dd>
+  </dl>
+
+  <h2 id="attention" data-short="Attention budget">Why more context isn't free</h2>
+  <p>A bigger window means you <em>can</em> include more. It doesn't mean the model uses all of it equally well. Three findings explain why, from mechanism to measurement.</p>
+
+  <h3>1 · The attention budget</h3>
+  <p>In self-attention (Vaswani et al., 2017), each token computes weights over all earlier tokens, and for each attention head those weights are normalized to sum to 1. So attention is a budget that gets shared. With 1,000 tokens in context, each one competes with 999 others for a share of the model's focus. With 100,000, it competes with 99,999. The number of token pairs grows with the square of the length. Models also see far fewer very long sequences in training than short ones. This is an intuition rather than a precise law, but it predicts what the measurements show: relevant information gets harder to use as more irrelevant information surrounds it.</p>
+
+  <h3>2 · Lost in the middle</h3>
+  <p>Liu et al. (2024) gave models a question and 20 documents, only one of which held the answer, and moved that document from first to last position. Accuracy was highest when the answer was near the start or the end of the context, and lowest in the middle. In some settings, mid-context accuracy fell below the accuracy with no documents at all.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 262" role="img" aria-label="An illustrative U-shaped curve. Accuracy is high when the relevant document is at the start of the context, falls to its lowest when it is in the middle, and rises again near the end. A dashed line marks accuracy with no documents; the middle of the curve dips below it.">
+        <defs>
+          <marker id="f0602-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <line class="e-muted" x1="80" y1="210" x2="80" y2="30" marker-end="url(#f0602-ah)"/>
+        <line class="e-muted" x1="80" y1="210" x2="680" y2="210" marker-end="url(#f0602-ah)"/>
+        <text class="t-sm t-muted" x="72" y="40" text-anchor="end">higher</text>
+        <text class="t-sm t-muted" x="72" y="204" text-anchor="end">lower</text>
+        <text class="t-sm t-muted" x="20" y="124">accuracy</text>
+        <text class="t-sm t-muted" x="90" y="230">1st</text>
+        <text class="t-sm t-muted" x="370" y="230" text-anchor="middle">10th</text>
+        <text class="t-sm t-muted" x="650" y="230" text-anchor="end">20th</text>
+        <text class="t-sm t-muted" x="380" y="252" text-anchor="middle">position of the document that holds the answer (of 20)</text>
+
+        <line class="e-muted e-dash" x1="80" y1="164" x2="660" y2="164"/>
+        <text class="t-xs t-muted" x="88" y="178">accuracy with no documents</text>
+
+        <path class="e-accent e-thick" d="M96,56 C170,140 290,186 370,186 C450,186 570,150 650,74"/>
+        <circle class="n-accent" cx="96" cy="56" r="5"/>
+        <circle class="n-red" cx="370" cy="186" r="5"/>
+        <circle class="n-accent" cx="650" cy="74" r="5"/>
+        <text class="t-sm t-accent" x="110" y="52">start: well used</text>
+        <text class="t-sm t-red" x="370" y="204" text-anchor="middle">middle: weakest</text>
+        <text class="t-sm t-accent" x="636" y="66" text-anchor="end">end: well used</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 6.2</b>Lost in the middle. This is the shape of the result in Liu et al. (2024), drawn for illustration. It isn't their data, and newer models show it to different degrees. The lesson that lasts: position matters, and the middle of a long context is the worst place for something important.</figcaption>
+  </figure>
+
+  <h3>3 · Context rot</h3>
+  <p>“Context rot” is the general observation that a model's ability to use information in its context degrades as the input grows, even on simple tasks. Chroma's 2025 report of that name found the drop across many models, and found it worse when the context held <em>distractors</em>: passages that look relevant but aren't. The RULER benchmark (Hsieh et al., 2024) found that a model's <em>effective</em> context length, where it still performs well, is often much shorter than its advertised window.</p>
+  <p>Distractors are the agent-specific problem. An agent's history is full of near-misses: the wrong file it opened first, the test output from before the fix, the search results it rejected. They're exactly the passages that look relevant but aren't.</p>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>Every token you add competes with every token already there.</strong> Practical rules that follow: put standing instructions at the start (system prompt) and restate the current goal near the end (the latest turn). Don't bury a critical fact in the middle of 60K tokens of logs. Remove stale tool output instead of keeping it “just in case”. When in doubt, a smaller context with the right things in it beats a larger one.</p>
+  </div>
+
+  <h2 id="cache-order" data-short="Ordering and caching">Ordering and the prompt-cache prefix</h2>
+  <p>Chapter 01 showed that an agent re-sends its whole history on every call. Prompt caching is how providers make that affordable. The provider stores the processed state of a request's opening tokens, and a later request that begins with <em>exactly the same bytes</em> reuses that work instead of recomputing it. It's a prefix match. Any change, even one character, invalidates everything after that point.</p>
+  <p>The Anthropic API renders a request in a fixed order: <code>tools</code>, then <code>system</code>, then <code>messages</code>. So the rule for ordering is simple: <strong>stable first, volatile last.</strong> Content that never changes goes earliest, per-session content goes after it, and per-turn content goes at the end. Anything that changes on every request (a timestamp, a request ID) should be removed or moved to the very end.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 296" role="img" aria-label="Two pairs of consecutive requests. Panel A: tools, a frozen system prompt and turns 1 to 3 are byte-identical between request n and request n plus 1, so all of it is read from cache and only turn 4 is new. Panel B: the system prompt contains the current time, which differs between the two requests, so only the tools are cached and everything from the system prompt onward is re-processed on every call.">
+        <text class="t-b" x="16" y="20">A · Stable content first: each request reuses the previous one's prefix</text>
+        <text class="t-xs t-accent" x="530" y="36" text-anchor="middle">breakpoint</text>
+        <text class="t-sm t-muted" x="16" y="56">request n</text>
+        <rect class="n-violet" x="110" y="40" width="80" height="26"/><text class="t-sm" x="150" y="57" text-anchor="middle">tools</text>
+        <rect class="n-accent" x="190" y="40" width="100" height="26"/><text class="t-sm" x="240" y="57" text-anchor="middle">system</text>
+        <rect class="n-plain" x="290" y="40" width="80" height="26"/><text class="t-sm" x="330" y="57" text-anchor="middle">turn 1</text>
+        <rect class="n-plain" x="370" y="40" width="80" height="26"/><text class="t-sm" x="410" y="57" text-anchor="middle">turn 2</text>
+        <rect class="n-amber" x="450" y="40" width="80" height="26"/><text class="t-sm" x="490" y="57" text-anchor="middle">turn 3 (new)</text>
+        <line class="e-accent e-thick" x1="530" y1="38" x2="530" y2="68"/>
+
+        <text class="t-sm t-muted" x="16" y="96">request n+1</text>
+        <rect class="n-violet" x="110" y="80" width="80" height="26"/><text class="t-sm" x="150" y="97" text-anchor="middle">tools</text>
+        <rect class="n-accent" x="190" y="80" width="100" height="26"/><text class="t-sm" x="240" y="97" text-anchor="middle">system</text>
+        <rect class="n-plain" x="290" y="80" width="80" height="26"/><text class="t-sm" x="330" y="97" text-anchor="middle">turn 1</text>
+        <rect class="n-plain" x="370" y="80" width="80" height="26"/><text class="t-sm" x="410" y="97" text-anchor="middle">turn 2</text>
+        <rect class="n-plain" x="450" y="80" width="80" height="26"/><text class="t-sm" x="490" y="97" text-anchor="middle">turn 3</text>
+        <rect class="n-amber" x="530" y="80" width="80" height="26"/><text class="t-sm" x="570" y="97" text-anchor="middle">turn 4 (new)</text>
+        <line class="e-accent e-thick" x1="610" y1="78" x2="610" y2="108"/>
+
+        <path class="e-accent" d="M110,112 V118 H528 V112"/>
+        <text class="t-sm t-accent" x="319" y="132" text-anchor="middle">read from cache: identical bytes</text>
+        <path class="e-amber" d="M532,112 V118 H610 V112"/>
+        <text class="t-sm t-amber" x="571" y="132" text-anchor="middle">written</text>
+        <text class="t-xs t-muted" x="622" y="90">usage: large read,</text>
+        <text class="t-xs t-muted" x="622" y="103">small write</text>
+
+        <text class="t-b" x="16" y="166">B · A timestamp in the system prompt: the prefix breaks at the system prompt, every call</text>
+        <text class="t-sm t-muted" x="16" y="202">request n</text>
+        <rect class="n-violet" x="110" y="186" width="80" height="26"/><text class="t-sm" x="150" y="203" text-anchor="middle">tools</text>
+        <rect class="n-accent" x="190" y="186" width="100" height="26"/><text class="t-xs t-mono" x="240" y="203" text-anchor="middle">time 09:14:07</text>
+        <rect class="n-plain" x="290" y="186" width="80" height="26"/><text class="t-sm" x="330" y="203" text-anchor="middle">turn 1</text>
+        <rect class="n-plain" x="370" y="186" width="80" height="26"/><text class="t-sm" x="410" y="203" text-anchor="middle">turn 2</text>
+        <rect class="n-amber" x="450" y="186" width="80" height="26"/><text class="t-sm" x="490" y="203" text-anchor="middle">turn 3 (new)</text>
+
+        <text class="t-sm t-muted" x="16" y="242">request n+1</text>
+        <rect class="n-violet" x="110" y="226" width="80" height="26"/><text class="t-sm" x="150" y="243" text-anchor="middle">tools</text>
+        <rect class="n-red" x="190" y="226" width="100" height="26"/><text class="t-xs t-mono" x="240" y="243" text-anchor="middle">time 09:15:12</text>
+        <rect class="n-red" x="290" y="226" width="80" height="26"/><text class="t-sm" x="330" y="243" text-anchor="middle">turn 1</text>
+        <rect class="n-red" x="370" y="226" width="80" height="26"/><text class="t-sm" x="410" y="243" text-anchor="middle">turn 2</text>
+        <rect class="n-red" x="450" y="226" width="80" height="26"/><text class="t-sm" x="490" y="243" text-anchor="middle">turn 3</text>
+        <rect class="n-red" x="530" y="226" width="80" height="26"/><text class="t-sm" x="570" y="243" text-anchor="middle">turn 4 (new)</text>
+
+        <path class="e-accent" d="M110,258 V264 H188 V258"/>
+        <text class="t-sm t-accent" x="149" y="280" text-anchor="middle">cached: tools only</text>
+        <path class="e-red" d="M192,258 V264 H610 V258"/>
+        <text class="t-sm t-red" x="401" y="280" text-anchor="middle">one changed byte: everything after it is processed again</text>
+        <text class="t-xs t-muted" x="622" y="236">usage: tiny read,</text>
+        <text class="t-xs t-muted" x="622" y="249">big write, every call</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 6.3</b>Caching is a prefix match. In A, the cached prefix grows by one turn per call and only the new turn is processed at full cost. In B, a clock in the system prompt changes the bytes near the start, so the turns after it can never be reused, even though they're identical. This is your Predict answer 2.</figcaption>
+  </figure>
+
+  <h3>The request and the usage it returns</h3>
+  <p>You mark where a cacheable prefix ends with a <code>cache_control</code> breakpoint. A request can have up to four. A typical agent marks the end of the frozen system prompt, plus the end of the newest message, so the whole conversation so far is cached for the next call.</p>
+  <p class="code-label">Request at step 12 (JSON wire shape, trimmed)</p>
+<pre><code>{
+  <span class="s">"model"</span>: <span class="s">"…"</span>,
+  <span class="s">"max_tokens"</span>: <span class="n">16000</span>,
+  <span class="s">"tools"</span>: [ <span class="c">/* sorted by name, identical on every call */</span> ],
+  <span class="s">"system"</span>: [
+    {<span class="s">"type"</span>: <span class="s">"text"</span>, <span class="s">"text"</span>: <span class="s">"You are a coding agent… (frozen for the run)"</span>,
+     <span class="hl"><span class="s">"cache_control"</span>: {<span class="s">"type"</span>: <span class="s">"ephemeral"</span>}</span>}
+  ],
+  <span class="s">"messages"</span>: [
+    <span class="c">/* turns 1 … 11, never edited after they were sent */</span>
+    {<span class="s">"role"</span>: <span class="s">"user"</span>, <span class="s">"content"</span>: [
+      {<span class="s">"type"</span>: <span class="s">"tool_result"</span>, <span class="s">"tool_use_id"</span>: <span class="s">"toolu_12"</span>, <span class="s">"content"</span>: <span class="s">"…test output…"</span>,
+       <span class="hl"><span class="s">"cache_control"</span>: {<span class="s">"type"</span>: <span class="s">"ephemeral"</span>}</span>},
+      {<span class="s">"type"</span>: <span class="s">"text"</span>, <span class="s">"text"</span>: <span class="s">"Current goal: make test_retry_backoff pass without touching shared/."</span>}
+    ]}
+  ]
+}</code></pre>
+  <p class="code-label">The usage block in the response</p>
+<pre><code><span class="s">"usage"</span>: {
+  <span class="s">"cache_read_input_tokens"</span>:     <span class="n">82650</span>,  <span class="c">// the prefix that matched: billed at a fraction of the input rate</span>
+  <span class="s">"cache_creation_input_tokens"</span>: <span class="n">3230</span>,   <span class="c">// new prefix written to the cache: billed at a premium</span>
+  <span class="s">"input_tokens"</span>:                <span class="n">120</span>,    <span class="c">// only what follows the last breakpoint</span>
+  <span class="s">"output_tokens"</span>:               <span class="n">310</span>
+}
+<span class="c">// prompt size = 82,650 + 3,230 + 120 = 86,000 tokens (the request in Figure 6.1)</span></code></pre>
+  <p>Two things to notice. First, <code>input_tokens</code> is <em>not</em> the size of the prompt. It's only the uncached remainder. A budget meter that reads only that field undercounts by a factor of several hundred here. Second, the healthy signature of a cached loop is that <code>cache_read_input_tokens</code> grows every turn while <code>cache_creation_input_tokens</code> stays about the size of the last turn's new content. If writes are large on every call, something early in the prefix is changing. The short “Current goal” line after the breakpoint follows the advice from the attention section: restate the goal near the end. It stays in the history, so next turn it's part of the cached prefix.</p>
+
+  <h3>Silent invalidators</h3>
+  <p>The cache never fails loudly. It just stops hitting, and the only symptom is cost and latency. These are the usual culprits:</p>
+  <div class="table-wrap"><table class="compact">
+    <thead><tr><th>Invalidator</th><th>Why it breaks the prefix</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td>The current time in the system prompt</td><td>Different bytes near the start of every request</td><td>Put the date in the latest user turn, at the granularity the task needs</td></tr>
+      <tr><td>A run ID or UUID near the top</td><td>Unique per request or per run</td><td>Keep IDs in logs and metadata, not the prompt, or put them at the very end</td></tr>
+      <tr><td>Non-deterministic serialization</td><td>A dict built in a different order, or a set iterated in a new process, yields different bytes</td><td><code>json.dumps(..., sort_keys=True)</code>; sort tool lists by name</td></tr>
+      <tr><td>Tools added or removed mid-run</td><td>Tools render first, so a change invalidates everything</td><td>Fix the tool set for a run. Load extra tools by appending them, never by swapping</td></tr>
+      <tr><td>Conditional system prompt sections</td><td>“If step &gt; 10, add a warning” makes the system prompt differ</td><td>Send the warning as text in the next user turn</td></tr>
+      <tr><td>Switching model mid-run</td><td>Caches belong to one model</td><td>Treat a different model as a separate context with its own cache</td></tr>
+      <tr><td>Editing or trimming old messages</td><td>The prefix changes at the edit point</td><td>Keep history append-only. Clear in batches (see compaction below)</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Three cache facts that matter for a swarm</h3>
+  <ul>
+    <li><strong>Forks reuse the parent's prefix only if they copy it exactly.</strong> A side call (summarize this history, or spawn a helper that sees the same context) hits the parent's cache only if it sends the same model, tools and system prompt and <em>appends</em> its instruction at the end. A sub-agent with its own system prompt and tool set starts its own cache.</li>
+    <li><strong>Parallel requests don't share a cache entry that doesn't exist yet.</strong> The entry becomes readable only once the first response begins streaming. Fire five siblings with the same 20K prefix at the same instant and all five pay to write it. Sending one first, waiting for its first token, then sending the other four lets four of them read it, at the cost of one time-to-first-token of extra latency.</li>
+    <li><strong>Entries expire.</strong> The default lifetime is about five minutes, with a longer option you can request. A loop that pauses for a slow tool or a human approval longer than that loses its cache. The minimum cacheable prefix length also varies by model, so a tiny prompt may not be cached at all.</li>
+  </ul>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>Caching makes a long prefix cheaper and faster. It doesn't make it smaller.</strong> The model still attends to every cached token, so everything in the attention section still applies. Ordering for the cache and pruning for attention are separate jobs, and they can conflict: removing an old tool result helps attention but breaks the prefix at that point. The compaction section deals with that trade-off.</p>
+  </div>
+
+  <h2 id="jit" data-short="Just-in-time retrieval">Just-in-time retrieval vs preloading</h2>
+  <p>There are two ways to get outside information into the window. <em>Preloading</em> decides up front what might be relevant and puts it all in before the model starts, as classic retrieval-augmented generation does with its top-k chunks. <em>Just-in-time</em> retrieval puts only lightweight <em>identifiers</em> in the context (file paths, URLs, record IDs, query names) and gives the agent tools to load the content when it decides it needs it.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 252" role="img" aria-label="Two strategies drawn to scale for the question where is the retry delay computed, in a 40-file repository. Preload: one call with 124K input tokens, with the three relevant files sitting in the middle of 120K of file contents. Just in time: three calls of 5K, 5.5K and 14.5K tokens, 25K in total, ending with only the three relevant files loaded.">
+        <text class="t-b" x="16" y="18">“Where is the retry delay computed?” in a 40-file repo · 4.5px per 1K tokens</text>
+
+        <text class="t-sm t-b" x="16" y="60">Preload</text>
+        <text class="t-xs t-muted" x="16" y="74">all files first</text>
+        <text class="t-xs t-accent" x="420" y="39" text-anchor="middle">the 3 files that matter</text>
+        <rect class="fill-violet" x="120" y="44" width="18" height="28"/>
+        <rect class="fill-amber" x="138" y="44" width="540" height="28"/>
+        <rect class="fill-accent" x="380" y="44" width="13.5" height="28"/>
+        <rect class="fill-accent" x="404" y="44" width="13.5" height="28"/>
+        <rect class="fill-accent" x="448" y="44" width="13.5" height="28"/>
+        <text class="t-sm" x="120" y="90">1 call · 124K input · the relevant 9K sits in the middle of 120K</text>
+
+        <text class="t-sm t-b" x="16" y="134">Just in time</text>
+        <text class="t-xs t-muted" x="16" y="148">file list + tools</text>
+        <rect class="fill-violet" x="120" y="118" width="18" height="20"/>
+        <rect class="fill-fg" x="138" y="118" width="4.5" height="20"/>
+        <text class="t-sm" x="152" y="132">call 1 · 5K · file list only → grep "retry"</text>
+
+        <rect class="fill-violet" x="120" y="146" width="18" height="20"/>
+        <rect class="fill-fg" x="138" y="146" width="4.5" height="20"/>
+        <rect class="fill-muted" x="142.5" y="146" width="2.25" height="20"/>
+        <text class="t-sm" x="154" y="160">call 2 · 5.5K · + 6 grep hits → read 3 files</text>
+
+        <rect class="fill-violet" x="120" y="174" width="18" height="20"/>
+        <rect class="fill-fg" x="138" y="174" width="4.5" height="20"/>
+        <rect class="fill-muted" x="142.5" y="174" width="2.25" height="20"/>
+        <rect class="fill-accent" x="144.75" y="174" width="40.5" height="20"/>
+        <text class="t-sm" x="195" y="188">call 3 · 14.5K · + the 3 files → answer</text>
+
+        <text class="t-sm t-b" x="120" y="218">3 calls · 25K input in total · nearly every token on the last call is relevant</text>
+        <text class="t-xs t-muted" x="16" y="242">Violet: tools and system prompt (4K). Amber: other files. Accent: the files that answer the question.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 6.4</b>Preload vs just in time, to scale. Preloading takes one round trip and about five times the tokens, and it puts the answer in the middle, where Figure 6.2 says it's used worst. Just in time takes three round trips and depends on the agent finding the right files with its tools.</figcaption>
+  </figure>
+
+  <p>Just-in-time retrieval works because identifiers carry signal before any content is loaded. A path like <code>billing/retry.py</code> tells the agent what's inside. A folder structure, file sizes and modification times tell it where to look first. Each step reveals the next layer. This is <em>progressive disclosure</em>: list the directory, grep for the term, read lines 30 to 80, and stop when there's enough.</p>
+  <p>The same idea applies to the parts of the context that aren't data:</p>
+  <ul>
+    <li><strong>Tools.</strong> Rather than sending 200 tool schemas on every call, a tool-search tool lets the agent find and load the few it needs. Loaded schemas are appended, not swapped in, so the cached prefix survives.</li>
+    <li><strong>Instructions.</strong> Skills keep only a short description in context, and the agent reads the full instruction file when the task calls for it.</li>
+    <li><strong>Intermediate results.</strong> With programmatic tool calling, the model writes a script that calls tools. Intermediate results go back to the script, not the context, and only the script's final output reaches the model.</li>
+  </ul>
+
+  <p>Tool design is part of context engineering (Chapter 04). A tool that returns a whole 3,000-line file has made a context decision for the agent. A better one returns a bounded window and tells the agent how to get more:</p>
+  <p class="code-label">A tool result designed for progressive disclosure (plain Python)</p>
+<pre><code>MAX_RESULT_TOKENS = <span class="n">4_000</span>
+
+<span class="k">def</span> read_file(path, start_line=<span class="n">1</span>, end_line=<span class="k">None</span>):
+    lines = open(path).read().splitlines()
+    end_line = end_line <span class="k">or</span> len(lines)
+    chunk = <span class="s">"\n"</span>.join(lines[start_line - <span class="n">1</span>:end_line])
+    <span class="k">if</span> count_tokens(chunk) &gt; MAX_RESULT_TOKENS:
+        chunk = truncate_to_tokens(chunk, MAX_RESULT_TOKENS)
+        <span class="hl">chunk += (<span class="s">f"\n[truncated: </span>{path}<span class="s"> has </span>{len(lines)}<span class="s"> lines. "</span>
+                  <span class="s">"Call read_file with start_line and end_line to see more.]"</span>)</span>
+    <span class="k">return</span> chunk</code></pre>
+
+  <div class="table-wrap"><table class="compact">
+    <thead><tr><th></th><th>Preload</th><th>Just in time</th><th>Hybrid</th></tr></thead>
+    <tbody>
+      <tr><td>Round trips</td><td>Fewest</td><td>More: each lookup is a tool call</td><td>In between</td></tr>
+      <tr><td>Tokens per call</td><td>High, and fixed whether used or not</td><td>Low, grows only with what's read</td><td>Small fixed part, plus reads</td></tr>
+      <tr><td>Main risk</td><td>Distractors, lost in the middle, stale copies</td><td>The agent doesn't find it, or explores in circles</td><td>Deciding what belongs in the fixed part</td></tr>
+      <tr><td>Good fit</td><td>Small, stable, always-needed material</td><td>Large or changing corpora with good identifiers</td><td>Most coding and research agents</td></tr>
+    </tbody>
+  </table></div>
+  <p>Anthropic's post describes Claude Code as a hybrid: project instruction files are loaded at the start, and the agent uses glob and grep to find everything else as needed. The fixed part should hold what's needed on almost every step and can't be cheaply discovered: conventions, constraints, where things live.</p>
+
+  <h2 id="compaction" data-short="Compaction and clearing">Compaction and clearing old tool results</h2>
+  <p>Retrieval decides what comes in. In a long run you also need to decide what goes out. There are three levers, from lightest to heaviest:</p>
+  <ol>
+    <li><strong>Clear old tool results.</strong> Replace the content of an old <code>tool_result</code> with a short stub. The <code>tool_use</code> block that produced it stays, so the model can still see that it read <code>billing/retry.py</code>, and can read it again if it needs to. Anthropic's post calls this the lightest-touch form of compaction.</li>
+    <li><strong>Compact.</strong> When the context nears a threshold, have the model summarize the run so far, then continue from a fresh context that holds the summary instead of the history.</li>
+    <li><strong>Start fresh from notes.</strong> The agent keeps its state in files outside the window, and a new context reads them back (next section).</li>
+  </ol>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 252" role="img" aria-label="The same run at 150K tokens, drawn to scale three ways. Before: prefix plus six assistant turns and six large tool results, at the compaction threshold. After clearing: the four oldest tool results are replaced by small stubs, leaving 72K. After compaction: the prefix plus a 3K summary and the latest turn, 15K.">
+        <line class="e-red e-dash" x1="580" y1="36" x2="580" y2="198"/>
+        <text class="t-xs t-red" x="580" y="28" text-anchor="middle">compact at 150K</text>
+        <line class="e-muted e-dash" x1="730" y1="36" x2="730" y2="198"/>
+        <text class="t-xs t-muted" x="730" y="28" text-anchor="end">window 200K</text>
+
+        <text class="t-sm t-b" x="16" y="63">Before</text>
+        <rect class="fill-violet" x="130" y="44" width="34.5" height="28"/>
+        <rect class="fill-muted" x="164.5" y="44" width="9" height="28"/><rect class="fill-amber" x="173.5" y="44" width="60" height="28"/>
+        <rect class="fill-muted" x="233.5" y="44" width="9" height="28"/><rect class="fill-amber" x="242.5" y="44" width="60" height="28"/>
+        <rect class="fill-muted" x="302.5" y="44" width="9" height="28"/><rect class="fill-amber" x="311.5" y="44" width="60" height="28"/>
+        <rect class="fill-muted" x="371.5" y="44" width="9" height="28"/><rect class="fill-amber" x="380.5" y="44" width="60" height="28"/>
+        <rect class="fill-muted" x="440.5" y="44" width="9" height="28"/><rect class="fill-amber" x="449.5" y="44" width="60" height="28"/>
+        <rect class="fill-muted" x="509.5" y="44" width="9" height="28"/><rect class="fill-amber" x="518.5" y="44" width="60" height="28"/>
+        <rect class="fill-fg" x="578.5" y="44" width="1.5" height="28"/>
+        <text class="t-sm" x="590" y="63">150K: at the threshold</text>
+
+        <text class="t-sm t-b" x="16" y="117">After clearing</text>
+        <rect class="fill-violet" x="130" y="98" width="34.5" height="28"/>
+        <rect class="fill-muted" x="164.5" y="98" width="9" height="28"/><rect class="fill-red" x="173.5" y="98" width="1.5" height="28"/>
+        <rect class="fill-muted" x="175" y="98" width="9" height="28"/><rect class="fill-red" x="184" y="98" width="1.5" height="28"/>
+        <rect class="fill-muted" x="185.5" y="98" width="9" height="28"/><rect class="fill-red" x="194.5" y="98" width="1.5" height="28"/>
+        <rect class="fill-muted" x="196" y="98" width="9" height="28"/><rect class="fill-red" x="205" y="98" width="1.5" height="28"/>
+        <rect class="fill-muted" x="206.5" y="98" width="9" height="28"/><rect class="fill-amber" x="215.5" y="98" width="60" height="28"/>
+        <rect class="fill-muted" x="275.5" y="98" width="9" height="28"/><rect class="fill-amber" x="284.5" y="98" width="60" height="28"/>
+        <rect class="fill-fg" x="344.5" y="98" width="1.5" height="28"/>
+        <text class="t-sm" x="356" y="117">72K · 4 oldest results now stubs</text>
+
+        <text class="t-sm t-b" x="16" y="171">After compaction</text>
+        <rect class="fill-violet" x="130" y="152" width="34.5" height="28"/>
+        <rect class="fill-accent" x="164.5" y="152" width="9" height="28"/>
+        <rect class="fill-fg" x="173.5" y="152" width="1.5" height="28"/>
+        <text class="t-sm" x="186" y="171">15K · prefix + a 3K summary + the next turn</text>
+
+        <line class="e-line" x1="130" y1="200" x2="130" y2="206"/><text class="t-xs t-muted" x="130" y="218" text-anchor="middle">0</text>
+        <line class="e-line" x1="280" y1="200" x2="280" y2="206"/><text class="t-xs t-muted" x="280" y="218" text-anchor="middle">50K</text>
+        <line class="e-line" x1="430" y1="200" x2="430" y2="206"/><text class="t-xs t-muted" x="430" y="218" text-anchor="middle">100K</text>
+        <line class="e-line" x1="580" y1="200" x2="580" y2="206"/><text class="t-xs t-muted" x="580" y="218" text-anchor="middle">150K</text>
+        <line class="e-line" x1="730" y1="200" x2="730" y2="206"/><text class="t-xs t-muted" x="730" y="218" text-anchor="middle">200K</text>
+        <text class="t-xs t-muted" x="16" y="244">Violet: prefix. Grey: assistant turns. Amber: tool results. Red: stubs (widened to be visible). Accent: summary. 3px per 1K.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 6.5</b>Before and after, to scale. Clearing keeps the shape of the history and removes the bulk. Compaction keeps only what the summary says. Clearing is cheap and safe because anything cleared can be fetched again. Compaction is lossy: whatever the summary leaves out is gone.</figcaption>
+  </figure>
+
+  <p class="code-label">Context management between loop steps (plain Python, generic client)</p>
+<pre><code>CLEAR_AT    = <span class="n">100_000</span>   <span class="c"># prompt tokens: clear old tool results</span>
+COMPACT_AT  = <span class="n">150_000</span>   <span class="c"># prompt tokens: summarize and restart</span>
+KEEP_RECENT = <span class="n">2</span>         <span class="c"># newest tool results kept verbatim</span>
+
+<span class="k">def</span> prompt_tokens(usage):          <span class="c"># all three fields, not just input_tokens</span>
+    <span class="k">return</span> (usage.input_tokens + usage.cache_read_input_tokens
+            + usage.cache_creation_input_tokens)
+
+<span class="k">def</span> manage_context(messages, usage):
+    <span class="k">if</span> waiting_for_tool_result(messages):   <span class="c"># mid tool round: never cut here</span>
+        <span class="k">return</span> messages
+    size = prompt_tokens(usage)
+    <span class="k">if</span> size &gt; COMPACT_AT:
+        summary = llm.complete(
+            model=MODEL, system=SYSTEM, tools=TOOLS,   <span class="c"># same prefix as the loop, so a cache hit</span>
+            messages=messages + [user(COMPACTION_PROMPT)],
+        ).text
+        <span class="hl"><span class="k">return</span> [user(<span class="s">"Summary of the work so far:\n"</span> + summary + <span class="s">"\n\nContinue the task."</span>)]</span>
+    <span class="k">if</span> size &gt; CLEAR_AT:
+        <span class="k">return</span> clear_old_tool_results(messages, keep_last=KEEP_RECENT)
+    <span class="k">return</span> messages
+
+<span class="k">def</span> clear_old_tool_results(messages, keep_last):
+    results = [b <span class="k">for</span> m <span class="k">in</span> messages <span class="k">for</span> b <span class="k">in</span> m.content <span class="k">if</span> b.type == <span class="s">"tool_result"</span>]
+    <span class="k">for</span> block <span class="k">in</span> results[:-keep_last]:
+        block.content = stub_for(block)     <span class="c"># "[cleared: read_file billing/retry.py, 4.2K tokens. Re-run to see it.]"</span>
+    <span class="k">return</span> messages                         <span class="c"># tool_use blocks untouched, so every pair stays intact</span></code></pre>
+
+  <p class="code-label">A compaction prompt</p>
+<pre><code>Summarize this session so a fresh copy of you can continue it with no other context.
+Keep: the goal and every constraint the user gave; decisions made and why;
+what is done; what is failing, with the exact error; open questions;
+the file paths, IDs and commands needed to find details again.
+Drop: raw tool output and anything that can be re-fetched by re-running a call.
+For dead ends, write one line: "Tried X; failed because Y", so they aren't retried.</code></pre>
+
+  <h3>Clearing and compaction against the cache</h3>
+  <p>Here the two goals of this chapter collide. Clearing an old tool result edits the history, so the cached prefix breaks at the first cleared block and the next call re-writes everything after it. Clearing a little on every turn would break the cache on every turn. So clear in <strong>batches</strong>: wait until a threshold, clear a lot at once so the context drops well below it, then let the prefix grow and cache again. In the sketch above, clearing at 100K and keeping only the newest two results drops the context far under the threshold, so the next clear is several steps away rather than one.</p>
+  <p>There's a second constraint you met in Chapter 05. On models whose thinking blocks carry a signature bound to the earlier conversation, rewriting earlier history on the client side can invalidate the thinking that follows it, or get the request rejected. Two ways around it:</p>
+  <ul>
+    <li><strong>Use the provider's server-side features.</strong> The Anthropic API offers <em>context editing</em>, which clears old tool results and thinking blocks once thresholds are crossed, and <em>server-side compaction</em>, which summarizes earlier context into a compaction block. Both are designed to work with these rules.</li>
+    <li><strong>Compact client-side in the simple shape.</strong> The new context is the summary as a single user message, followed by the next turn. No older turns are replayed, so no old thinking needs to validate. This is what the sketch's <code>return</code> line does.</li>
+  </ul>
+  <p>And never cut between a <code>tool_use</code> and its <code>tool_result</code>. A request with an orphaned half is invalid.</p>
+
+  <div class="box pitfall">
+    <span class="box-label">Pitfall</span>
+    <p><strong>The summary drops the one constraint that mattered.</strong> At step 40 the user said “don't touch <code>shared/clock.py</code>”. At step 90 the context is compacted, the summary mentions the bug and the fix but not the constraint, and at step 95 the agent edits the file. Summaries are lossy and nobody checks them. Defenses: keep standing constraints outside the region that gets summarized (system prompt, project file or a notes file that's re-read). Have the compaction prompt list the kinds of things to keep. Test compaction directly: run the same task with and without it and diff the outcomes. Anthropic's post suggests tuning a compaction prompt for recall first, so nothing important is lost, and then trimming for precision.</p>
+  </div>
+
+  <h2 id="notes" data-short="Notes and scratchpads">Structured notes and scratchpads</h2>
+  <p>Compaction has a summarizer decide what mattered, after the fact. Structured notes have the agent decide while it's working, when it knows best. The agent writes its progress to a file outside the context window (a <code>NOTES.md</code>, a to-do list, a progress log) and reads it back when it needs to: after a compaction, at the start of a new session, or when it has lost the thread.</p>
+
+  <div class="trace">
+    <div class="trace-title">Notes surviving a compaction (a long debugging run)</div>
+    <div class="tr tr-think"><div class="tr-role">model</div><div class="tr-body">Found it: the test asserts an exact delay, but the backoff adds random jitter. Record that before anything else.</div></div>
+    <div class="tr tr-act"><div class="tr-role">tool call</div><div class="tr-body"><code>edit_file("NOTES.md", append="- Root cause: test asserts exact delay; jitter is random (billing/retry.py:42)")</code></div></div>
+    <div class="tr tr-obs"><div class="tr-role">result</div><div class="tr-body">ok</div></div>
+    <div class="tr tr-sys"><div class="tr-role">harness</div><div class="tr-body">Prompt is 151K, over 150K. Compaction runs. New context: tools, system prompt, summary, “Continue the task.”</div></div>
+    <div class="tr tr-act"><div class="tr-role">tool call</div><div class="tr-body"><code>read_file("NOTES.md")</code> <span class="muted">(the system prompt says: read NOTES.md before acting after a summary)</span></div></div>
+    <div class="tr tr-obs"><div class="tr-role">result</div><div class="tr-body">The goal, the constraint “don't touch shared/”, the root cause, and two next steps.</div></div>
+    <div class="tr tr-think"><div class="tr-role">model</div><div class="tr-body">Next: change the assertion to a range [base, base × 2]. Then run the test 50 times. shared/ is off limits.</div></div>
+  </div>
+
+  <p class="code-label">NOTES.md, as the agent keeps it</p>
+<pre><code># Goal
+Fix flaky test_retry_backoff in billing/. Don't modify anything under shared/.
+
+# Done
+- Reproduced: fails about 1 run in 5, depends on the random seed
+- Root cause: test asserts exact delay; jitter is random (billing/retry.py:42)
+
+# Next
+- [ ] Assert delay is within [base, base * 2]
+- [ ] Run the test 50 times to confirm
+
+# Dead ends
+- Pinning the seed in conftest.py: hides the bug, rejected</code></pre>
+
+  <p>Why this works: the notes are short, they're written by the agent while it knows what matters, and they live outside the window, so they survive anything that happens to it. Some variations:</p>
+  <ul>
+    <li><strong>A to-do list</strong> the agent updates as it goes. It's a plan (Chapter 05) that persists, and the next item is always visible.</li>
+    <li><strong>A scratchpad file</strong> for bulky work in progress, such as a table being filled in or partial results. The conversation holds only a pointer, and the agent reads back the part it needs.</li>
+    <li><strong>Machine-readable state</strong> such as a JSON file of test results that both the agent and the harness read. Use it when code, not just the model, needs to know progress.</li>
+    <li><strong>Version control as a log.</strong> Commit messages are notes with timestamps and diffs attached.</li>
+  </ul>
+  <p>The costs: the agent must be told to write notes and to read them, notes are tokens too when they're read back, and notes can go stale or contradict each other. Once notes outlive a session, they're <em>memory</em>, and Chapter 07 covers the risks.</p>
+
+  <h2 id="subagents" data-short="Sub-agents as isolation">Sub-agents as context isolation</h2>
+  <p>A sub-agent is a separate loop with its own fresh context window. The lead gives it a task, it explores as long as it needs to, and it returns a condensed result. All the file reads, dead ends and search results stay in the sub-agent's window. The lead only ever sees the task it sent and the result it got back.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 300" role="img" aria-label="A lead agent sends a 1K task to each of three sub-agents and gets back a 1.5K summary from each. The sub-agents read 60K, 45K and 70K in their own windows. Drawn to scale at the bottom: if the lead did all the work itself its context would be about 185K; with sub-agents it is about 18K.">
+        <defs>
+          <marker id="f0606-ah-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0606-ah-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-amber" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-accent" x="40" y="16" width="680" height="60" rx="6"/>
+        <text class="t-b" x="56" y="40">lead agent</text>
+        <text class="t-sm" x="56" y="60">its window holds: its own work (10K), 3 tasks sent, 3 summaries back · about 18K</text>
+
+        <line class="e-accent" x1="100" y1="76" x2="100" y2="138" marker-end="url(#f0606-ah-accent)"/>
+        <text class="t-xs t-accent" x="94" y="112" text-anchor="end">task · 1K</text>
+        <line class="e-amber" x1="160" y1="138" x2="160" y2="78" marker-end="url(#f0606-ah-amber)"/>
+        <text class="t-xs t-amber" x="166" y="112">summary · 1.5K</text>
+
+        <line class="e-accent" x1="350" y1="76" x2="350" y2="138" marker-end="url(#f0606-ah-accent)"/>
+        <text class="t-xs t-accent" x="344" y="112" text-anchor="end">task · 1K</text>
+        <line class="e-amber" x1="410" y1="138" x2="410" y2="78" marker-end="url(#f0606-ah-amber)"/>
+        <text class="t-xs t-amber" x="416" y="112">summary · 1.5K</text>
+
+        <line class="e-accent" x1="600" y1="76" x2="600" y2="138" marker-end="url(#f0606-ah-accent)"/>
+        <text class="t-xs t-accent" x="594" y="112" text-anchor="end">task · 1K</text>
+        <line class="e-amber" x1="660" y1="138" x2="660" y2="78" marker-end="url(#f0606-ah-amber)"/>
+        <text class="t-xs t-amber" x="666" y="112">summary · 1.5K</text>
+
+        <rect class="n-violet" x="40" y="140" width="180" height="46" rx="6"/>
+        <text class="t-b t-sm" x="130" y="159" text-anchor="middle">sub-agent A</text>
+        <text class="t-sm" x="130" y="176" text-anchor="middle">search the code</text>
+        <rect class="n-violet" x="290" y="140" width="180" height="46" rx="6"/>
+        <text class="t-b t-sm" x="380" y="159" text-anchor="middle">sub-agent B</text>
+        <text class="t-sm" x="380" y="176" text-anchor="middle">read the docs</text>
+        <rect class="n-violet" x="540" y="140" width="180" height="46" rx="6"/>
+        <text class="t-b t-sm" x="630" y="159" text-anchor="middle">sub-agent C</text>
+        <text class="t-sm" x="630" y="176" text-anchor="middle">run the tests</text>
+
+        <rect class="fill-amber" x="40" y="194" width="120" height="12"/>
+        <text class="t-xs t-muted" x="40" y="220">reads 60K in its own window</text>
+        <rect class="fill-amber" x="290" y="194" width="90" height="12"/>
+        <text class="t-xs t-muted" x="290" y="220">reads 45K in its own window</text>
+        <rect class="fill-amber" x="540" y="194" width="140" height="12"/>
+        <text class="t-xs t-muted" x="540" y="220">reads 70K in its own window</text>
+
+        <text class="t-sm" x="40" y="257">lead does it all itself</text>
+        <rect class="fill-amber" x="200" y="246" width="370" height="14"/>
+        <text class="t-sm t-b" x="578" y="257">≈185K</text>
+        <text class="t-sm" x="40" y="283">lead with sub-agents</text>
+        <rect class="fill-accent" x="200" y="272" width="36" height="14"/>
+        <text class="t-sm t-b" x="244" y="283">≈18K</text>
+        <text class="t-xs t-muted" x="300" y="283">bars at the bottom: 2px per 1K tokens, the lead's window only</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 6.6</b>Sub-agents as context isolation. Exploration happens in windows the lead never sees. The lead's context stays small and clean, at the cost of seeing only what each sub-agent chose to report.</figcaption>
+  </figure>
+
+  <p>Anthropic's write-up of its multi-agent research system (2025) describes this as the core benefit: sub-agents search in parallel, each in its own context window, and condense what they found for the lead. The same post is candid that the approach uses far more tokens in total than a single agent. Chapter 14 weighs that trade.</p>
+  <p>What you trade for a clean lead context:</p>
+  <ul>
+    <li><strong>Information loss at the boundary.</strong> The lead knows only what the summary says. A detail the sub-agent judged unimportant is gone, and the lead can't tell that it's missing. Chapter 16 calls this the telephone game.</li>
+    <li><strong>Total tokens.</strong> The lead's context shrinks, but every sub-agent pays for its own prefix and history. If two sub-agents read the same files, you pay twice. The next section does the arithmetic.</li>
+    <li><strong>The handoff is now a design problem.</strong> What does the child receive (the whole parent context, or a distilled task)? What must it return? A return contract with a size cap, the evidence (paths, IDs) and a list of what it <em>didn't</em> check makes the lead's next decision better informed.</li>
+    <li><strong>Caching.</strong> A sub-agent with its own system prompt and tools has its own cache. It doesn't disturb the lead's cache, which is also why a sub-agent can use a cheaper model without breaking the lead's prefix. Siblings with an identical prefix can share one cache entry if you stagger the first request, as described in the caching section.</li>
+  </ul>
+
+  <h2 id="growth" data-short="Token growth math">The token growth math, revisited</h2>
+  <p>Chapter 01 derived how input tokens add up over an agent run. If every call re-sends a base of <em>b</em> tokens plus a history that grows by <em>a</em> tokens per step, then over <em>n</em> steps:</p>
+  <div class="formula">total_input ≈ n·b + a · n(n − 1) / 2</div>
+  <p>The second term grows with the square of <em>n</em>. Each technique in this chapter attacks it differently. Take Chapter 01's numbers (b = 2K, a = 4K) and 30 steps of work:</p>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th>Strategy</th><th>What happens</th><th>Arithmetic</th><th>Total input</th></tr></thead>
+    <tbody>
+      <tr><td>One agent, no management</td><td>History grows 4K every step for 30 steps</td><td>30·2K + 4K·(30·29/2) = 60K + 1,740K</td><td><strong>≈ 1.8M</strong></td></tr>
+      <tr><td>One agent, history capped at 40K by clearing</td><td>Grows for the first 10 steps, then holds at about 42K per call</td><td>(10·2K + 4K·45) + 20·42K = 200K + 840K</td><td><strong>≈ 1.0M</strong></td></tr>
+      <tr><td>Lead plus 3 sub-agents</td><td>Lead: 6 steps, adding 2K per step. Each child: 8 steps from an empty history</td><td>Lead: 6·2K + 2K·15 = 42K. Children: 3 × (8·2K + 4K·28) = 3 × 128K</td><td><strong>≈ 0.43M</strong></td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The mechanisms are worth stating in general form:</p>
+  <ul>
+    <li><strong>A cap turns quadratic into linear.</strong> Once history is held at a ceiling <em>H</em>, each further call costs about <em>b + H</em>, so the total after that point grows in a straight line with <em>n</em>.</li>
+    <li><strong>Splitting divides the quadratic term.</strong> Cut <em>n</em> steps into <em>m</em> independent contexts of <em>n/m</em> steps each and the quadratic part goes from about <em>a·n²/2</em> to about <em>m · a·(n/m)²/2 = a·n²/(2m)</em>. Three children cut it to about a third, plus the lead's own small cost. This is your Predict answer 3.</li>
+    <li><strong>Caching changes the price of those tokens, not their number.</strong> A cached token is cheaper and faster, but it's still in the window, competing for attention.</li>
+  </ul>
+  <p>The sub-agent row assumes the three pieces of work are independent. If the children need each other's findings, you pay in one of two ways: duplicated reading (tokens go back up) or missing information (quality goes down). That's the question Chapter 14 asks before you reach for multiple agents.</p>
+
+  <div class="box pitfall">
+    <span class="box-label">Common misconceptions</span>
+    <ul>
+      <li><strong>“The window is 1M tokens, so I don't need to manage context.”</strong> Capacity isn't the same as effective use. Lost in the middle, context rot and distractors all get worse as the window fills.</li>
+      <li><strong>“Caching makes long context free.”</strong> It makes it cheaper and faster. The tokens are still there for the model to wade through.</li>
+      <li><strong>“<code>input_tokens</code> is my prompt size.”</strong> With caching it's only the uncached remainder. Sum all three input fields.</li>
+      <li><strong>“A summary keeps everything important.”</strong> It keeps what the summarizer thought was important at that moment. Test it.</li>
+      <li><strong>“More retrieved documents, better answers.”</strong> Past a point, extra documents are distractors.</li>
+      <li><strong>“Sub-agents save tokens.”</strong> They keep the lead's context small. Total tokens often go up.</li>
+    </ul>
+  </div>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Stage 4 · the planner's context.</strong> The plan says the planner receives the objective, relevant context, capabilities, constraints and the output format. Draw Figure 6.1 for your planner call: list each part and estimate its tokens. Which part is the biggest, and does it need to be?</li>
+      <li><strong>Stage 4 · ordering.</strong> Does your prompt builder put the stable parts first? Is anything that changes per agent or per call (agent ID, remaining budget, depth, a timestamp) placed early? Where should the remaining-budget line go so it doesn't break the prefix every call?</li>
+      <li><strong>Stage 5 · what crosses the boundary.</strong> The plan asks: what context goes from parent to child, everything or a distilled objective? What comes back, full output or a summary? Answer with Figure 6.6 in mind. What is the token cap on a child's result, and is it enforced by the prompt or by code?</li>
+      <li><strong>Stage 5 · fan-out and the cache.</strong> Siblings spawned together often share a prefix. Do you fire them all at once (simplest) or send one first so the rest read its cache? Is the extra latency worth it at your scale? You can measure this from the usage fields.</li>
+      <li><strong>Stage 5 · does any agent need compaction?</strong> If child loops have a low iteration limit, maybe no context ever gets near the window. Which is simpler to test with your fake client: compaction logic, or a limit that makes it unnecessary?</li>
+      <li><strong>Stage 6 · counting.</strong> Does your budget meter sum <code>input_tokens</code>, <code>cache_read_input_tokens</code> and <code>cache_creation_input_tokens</code>? Your cost report should show cache reads separately, or you can't tell whether ordering is working.</li>
+    </ul>
+  </div>
+
+  <h2 id="check">Check yourself</h2>
+  <p>Answer each one out loud or on paper before you open it.</p>
+  <div class="quiz">
+    <details>
+      <summary><span class="tag recall">Recall</span> Give three reasons a bigger context can make an agent worse, from mechanism to measurement.</summary>
+      <div><p><strong>Mechanism:</strong> attention weights are normalized to sum to 1, so every added token competes for a share of the same budget, and the number of token pairs grows with the square of the length. Models also see fewer very long sequences in training. <strong>Measurement:</strong> lost in the middle (Liu et al.): information in the middle of a long context is used worst. <strong>Measurement:</strong> context rot (Chroma) and RULER (Hsieh et al.): performance falls as input grows, effective length is shorter than the advertised window, and distractors make it worse. An agent's history is full of distractors.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag recall">Recall</span> In what order does the API render a request for caching, and what rule follows from it?</summary>
+      <div><p><code>tools</code>, then <code>system</code>, then <code>messages</code>. Caching is a byte-exact prefix match, and any change invalidates everything after it. So: stable content first and volatile content last. Never-changing material goes earliest, per-session material next, per-turn material at the end, and anything that changes on every request is removed or moved to the very end. Changing the tools or the model invalidates everything.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> A response reports <code>cache_read_input_tokens: 41000</code>, <code>cache_creation_input_tokens: 900</code>, <code>input_tokens: 3100</code>. How big was the prompt, and is caching healthy?</summary>
+      <div><p>The prompt was 41,000 + 900 + 3,100 = <strong>45,000</strong> tokens. A meter reading only <code>input_tokens</code> would say 3,100. Caching looks healthy: a large read and a small write is the signature of a prefix that grows without changing. The 3,100 is content after the last breakpoint. If that's the newest turn, fine. If it's large and recurs every call, move the breakpoint later so it gets cached.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> A 20-step run with b = 2K and a = 4K. What's the total input with no management, and with history capped at 40K by clearing?</summary>
+      <div><p>No management: 20·2K + 4K·(20·19/2) = 40K + 760K = <strong>800K</strong>, as in Chapter 01. Capped: the first 10 steps cost 10·2K + 4K·45 = 200K, and the remaining 10 steps cost about 42K each, so 420K. Total <strong>≈ 620K</strong>, about a quarter less. At 30 steps the cap saved almost half (1.8M to 1.0M). The longer the run, the more a cap is worth, because it turns the quadratic tail into a straight line.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> You spawn five sub-agents with an identical 20K prefix at the same instant. How many read the prefix from cache?</summary>
+      <div><p><strong>None.</strong> A cache entry becomes readable only once the first response begins streaming, so all five requests arrive before any entry exists and all five pay to write it. To share it, send one request, wait for its first token, then send the other four, which can then read the 20K prefix. The cost is one time-to-first-token of extra latency. Whether that's worth it depends on prefix size and how often you fan out, and the usage fields tell you whether it worked.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> An agent answers questions about a 3,000-file repository. What do you preload, and what do you leave to just-in-time retrieval?</summary>
+      <div><p>Preload what's needed on almost every step and can't be discovered cheaply: conventions, a short map of where things live, hard constraints, how to build and run tests. That's a few thousand tokens at most. Leave file contents to just-in-time retrieval through glob, grep and a bounded <code>read_file</code> whose truncation notes tell the agent how to read more. The directory listing itself is a set of identifiers that carry signal. Then watch the traces. If the agent often fails to find things, improve tool descriptions or add a search tool (Chapter 07's retrieval), rather than preloading more.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> After a compaction, the agent edits <code>shared/clock.py</code>, which the user forbade 50 steps earlier. What failed, and what are three defenses?</summary>
+      <div><p>A standing constraint lived only in the part of the history that got summarized, and the summary dropped it. Defenses: (1) keep standing constraints out of the summarizable region, in the system prompt, a project file or a notes file that's always re-read; (2) make the compaction prompt list the kinds of things that must survive, constraints first, and test it by running tasks with and without compaction and comparing; (3) don't rely on the model at all for hard rules: the harness's file-write tool refuses paths under <code>shared/</code>. The model proposes and the harness disposes (Chapter 08). Permission checks in code survive any context loss.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “Context windows are a million tokens now. Why does context engineering still matter?”</summary>
+      <div><p>Capacity isn't effective use. Benchmarks such as RULER show effective length below the advertised window, and lost-in-the-middle and context-rot results show that the position of information and the presence of distractors matter. Cost and latency scale with tokens, and in an agent loop input tokens grow with the square of the step count. Caching lowers the price of a stable prefix, but the model still attends to all of it. So the work remains: order for the cache, prune for attention (clear tool results, compact), retrieve just in time, keep durable notes, and isolate exploration in sub-agents. Then measure, because which levers matter depends on the task and the model.</p></div>
+    </details>
+  </div>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><strong>Anthropic, “Effective context engineering for AI agents”</strong> (Anthropic Engineering, 2025).<span class="why">The main source for this chapter: the smallest-set-of-high-signal-tokens framing, the attention budget, just-in-time retrieval, compaction, tool-result clearing, structured notes and sub-agents.</span></li>
+    <li><strong>Nelson F. Liu et al., “Lost in the Middle: How Language Models Use Long Contexts”</strong> (TACL, 2024).<span class="why">The U-shaped position result. Read the multi-document QA figures.</span></li>
+    <li><strong>Chroma, “Context Rot: How Increasing Input Tokens Impacts LLM Performance”</strong> (technical report, 2025).<span class="why">Performance falls as input grows, across many models, and distractors make it worse.</span></li>
+    <li><strong>Cheng-Ping Hsieh et al., “RULER: What's the Real Context Size of Your Long-Context Language Models?”</strong> (2024).<span class="why">Effective context length vs advertised context length.</span></li>
+    <li><strong>Ashish Vaswani et al., “Attention Is All You Need”</strong> (NeurIPS, 2017).<span class="why">Self-attention and the softmax normalization behind the attention-budget intuition.</span></li>
+    <li><strong>Patrick Lewis et al., “Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks”</strong> (NeurIPS, 2020).<span class="why">The original RAG paper: retrieval as preloading.</span></li>
+    <li><strong>Anthropic, Claude API documentation: Prompt caching</strong>.<span class="why">Render order, breakpoints, lifetimes, usage fields and what invalidates the cache. Check it for current limits, which vary by model.</span></li>
+    <li><strong>Anthropic, Claude API documentation: Context editing and Compaction</strong>.<span class="why">The server-side versions of tool-result clearing and summarization, and how they interact with thinking blocks.</span></li>
+    <li><strong>Anthropic, “How we built our multi-agent research system”</strong> (Anthropic Engineering, 2025).<span class="why">Sub-agents as parallel, isolated contexts that condense findings for a lead, and the token cost of doing so.</span></li>
+  </ul>
+
+  <section class="recall-card" aria-labelledby="recall-06">
+    <h2 id="recall-06" data-short="Recall card">Recall card</h2>
+    <p class="muted small">Five lines to rehearse. If you can expand each into a minute of explanation, you know this chapter.</p>
+    <ol>
+      <li>Context is a budget, not a container: find the smallest set of high-signal tokens. In a long run, old tool results are most of the window.</li>
+      <li>More tokens dilute attention: lost in the middle, context rot, distractors. Instructions go first, the current goal goes last.</li>
+      <li>Caching is a byte-exact prefix match over tools, then system, then messages. Stable first, volatile last. It makes tokens cheaper, not fewer.</li>
+      <li>Retrieve just in time through identifiers and bounded tools. Remove with clearing (light, re-fetchable) or compaction (lossy), in batches, never mid tool round.</li>
+      <li>Notes persist what matters outside the window. Sub-agents isolate exploration and split the quadratic term, at the cost of what the summary leaves out.</li>
+    </ol>
+  </section>
+
+  <div class="done">
+    <input type="checkbox" id="done-toggle" data-chapter="06">
+    <label for="done-toggle">I can explain this chapter without notes<small>Saved in this browser only. It updates the count on the guide's home page.</small></label>
+  </div>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="05-reasoning-and-planning.html"><small>Previous · Chapter 05</small>Reasoning and planning patterns</a>
+    <a class="next" href="07-memory.html"><small>Next · Chapter 07</small>Memory systems</a>
+  </nav>
+</main>
+<aside class="toc-rail" aria-label="On this page"><p class="toc-title">In this chapter</p><nav data-toc></nav></aside>
+</div>
+</body>
+</html>

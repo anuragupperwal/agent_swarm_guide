@@ -1,0 +1,657 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Reliability Engineering · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar"><div class="topbar-inner">
+  <a class="brand" href="../index.html">Loop <span>→</span> Swarm</a>
+  <div class="crumbs"><a href="../index.html">Guide</a> · Part 3 · The harness · Chapter 11</div>
+  <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+</div></header>
+
+<div class="page has-toc">
+<main class="chapter">
+  <header class="ch-head">
+    <p class="eyebrow"><b>Part 3 · The harness</b> · Chapter 11 · Level L3</p>
+    <h1>Reliability engineering</h1>
+    <p class="lede">Everything in an agent run fails sometimes: the network, the provider, the model's output, the tools, and the agent's own judgment. A reliable harness doesn't prevent failure. It turns every failure into a contained, visible event that the code around it can respond to.</p>
+    <ul class="ch-meta">
+      <li><b>50 min</b> reading</li>
+      <li>Builds on: <b>ch01 validation, ch09 state, ch10 cancellation</b></li>
+      <li>Your project: <b>Stage 2, Stage 3, Stage 6</b></li>
+    </ul>
+    <ol class="where" aria-label="Where this chapter sits in the guide">
+      <li class="past"><span>Part 1</span>Foundations</li>
+      <li class="past"><span>Part 2</span>Thinking &amp; memory</li>
+      <li class="here"><span>Part 3</span>The harness</li>
+      <li><span>Part 4</span>Multi-agent</li>
+      <li><span>Part 5</span>Together</li>
+    </ol>
+  </header>
+
+  <details class="toc-mobile"><summary>In this chapter</summary><div data-toc></div></details>
+
+  <div class="box predict">
+    <span class="box-label">Predict first · 10 min</span>
+    <p>Write answers in <code>docs/LEARNING_NOTES.md</code> under “Guide ch11”. Tag each one <em>sure</em> or <em>guess</em>. Don't read on until you're done.</p>
+    <ol>
+      <li>Each step of an agent run succeeds 95% of the time, independently. Estimate the chance that a 20-step run has no failed step. Write down a number before you calculate it.</li>
+      <li>Your model client makes up to 3 attempts per call. The root agent, its child and its grandchild each wrap the call below them in the same retry logic. The provider goes down. In the worst case, how many requests reach the provider for one grandchild call?</li>
+      <li>A tool sends an email. The call timed out after 30 seconds. Is it safe to retry? What would you need to know first?</li>
+    </ol>
+  </div>
+
+  <h2 id="big-idea">The big idea</h2>
+  <p>A single model call fails rarely enough that you can ignore it in a demo. An agent run makes dozens of calls, and a swarm makes hundreds. Small per-step failure rates multiply, and the result surprises almost everyone the first time they calculate it.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 250" role="img" aria-label="Bar chart, drawn to scale. If each step succeeds with probability 0.95, the chance that the whole run succeeds is 0.95 for 1 step, 0.774 for 5 steps, 0.599 for 10 steps, 0.358 for 20 steps and 0.077 for 50 steps.">
+        <text class="t-sm t-muted" x="20" y="24">chance that no step fails, when each step succeeds with p = 0.95</text>
+        <text class="t-mono" x="20" y="56">1 step</text>
+        <rect class="n-sunken" x="150" y="42" width="500" height="22" rx="3"/>
+        <rect class="fill-accent" x="150" y="42" width="475" height="22" rx="3"/>
+        <text class="t-sm t-b" x="658" y="58">0.950</text>
+        <text class="t-mono" x="20" y="92">5 steps</text>
+        <rect class="n-sunken" x="150" y="78" width="500" height="22" rx="3"/>
+        <rect class="fill-accent" x="150" y="78" width="387" height="22" rx="3"/>
+        <text class="t-sm t-b" x="545" y="94">0.774</text>
+        <text class="t-mono" x="20" y="128">10 steps</text>
+        <rect class="n-sunken" x="150" y="114" width="500" height="22" rx="3"/>
+        <rect class="fill-accent" x="150" y="114" width="299" height="22" rx="3"/>
+        <text class="t-sm t-b" x="457" y="130">0.599</text>
+        <text class="t-mono" x="20" y="164">20 steps</text>
+        <rect class="n-sunken" x="150" y="150" width="500" height="22" rx="3"/>
+        <rect class="fill-amber" x="150" y="150" width="179" height="22" rx="3"/>
+        <text class="t-sm t-b" x="337" y="166">0.358</text>
+        <text class="t-sm t-amber" x="390" y="166">fails almost 2 runs in 3</text>
+        <text class="t-mono" x="20" y="200">50 steps</text>
+        <rect class="n-sunken" x="150" y="186" width="500" height="22" rx="3"/>
+        <rect class="fill-red" x="150" y="186" width="38" height="22" rx="3"/>
+        <text class="t-sm t-b" x="196" y="202">0.077</text>
+        <text class="t-sm t-muted" x="20" y="238">The formula is p to the power n. At p = 0.99, 20 steps gives 0.818. Every reliability technique in this chapter is a way to push p closer to 1.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 11.1</b>Compounding failure. The bars are to scale. Real steps aren't independent, so treat this as a lower bound on how much reliability work you need, not a precise forecast. It answers predict question 1.</figcaption>
+  </figure>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>Every failure must end up as data, in a known place, with a known owner.</strong> Your spec calls this principle 2.8, “failures are data”. A failure that becomes a value can be retried, logged, counted, shown to the parent, or reported to a human. A failure that escapes as an uncaught exception, or that the model quietly papers over, can't be handled by anyone.</p>
+  </div>
+  <p>The chapter follows the order in which a harness meets a failure. First, recognize what kind it is (the taxonomy). Then contain it (errors as values). Then decide whether to try again (retries, idempotency), how long to wait (timeouts), how much to spend (budgets), and whether the output is any good (validation, guardrails). Last come the techniques for keeping one failure from spreading: circuit breakers, graceful degradation, loop detection and hard stopping mechanisms.</p>
+
+  <h2 id="taxonomy" data-short="Failure taxonomy">A failure taxonomy</h2>
+  <p>“The agent failed” isn't actionable. The right response depends entirely on the kind of failure, so the first job is to sort failures into classes. The most useful single question is <strong>“would trying the exact same thing again plausibly work?”</strong> If yes, the failure is <em>transient</em>. If no, it's <em>permanent</em>, and retrying only burns money.</p>
+
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Class</th><th>Examples</th><th>Retry?</th><th>Typical response</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Transient infrastructure</strong></td><td>HTTP 429 rate limit, 529 overloaded, 500, connection reset, read timeout</td><td>Yes, with backoff</td><td>Retry with jitter. Honor a <code>retry-after</code> header when the provider sends one.</td></tr>
+        <tr><td><strong>Permanent request error</strong></td><td>400 invalid request, 401 or 403 auth, 413 request too large, prompt over the context limit</td><td>No</td><td>Fail fast. The request or the config is wrong, and it will be wrong next time too.</td></tr>
+        <tr><td><strong>Output shape</strong></td><td>Invalid JSON, schema violation, <code>stop_reason: max_tokens</code> cut the output off</td><td>Sometimes</td><td>Re-ask once or twice with the exact error. For truncation, raise <code>max_tokens</code> or ask for less.</td></tr>
+        <tr><td><strong>Semantic</strong></td><td>Valid JSON with wrong content, a made-up tool name, a reference to a file that doesn't exist</td><td>Rarely helps alone</td><td>Semantic validation (ch01 Fig 1.4), then re-plan with feedback, or fail.</td></tr>
+        <tr><td><strong>Refusal</strong></td><td><code>stop_reason: refusal</code></td><td>No</td><td>Same input, same likely result. Surface it. Never loop on it.</td></tr>
+        <tr><td><strong>Tool failure</strong></td><td>Tool raised, bad arguments, downstream API down</td><td>Depends on the tool</td><td>Return it to the model as an <code>is_error</code> observation, or retry it if the tool is idempotent and the error is transient.</td></tr>
+        <tr><td><strong>Behavioral</strong></td><td>Repeats the same call, wanders off task, stops too early, does more than asked</td><td>No</td><td>Detect it in code (step limits, loop detection), stop, and report.</td></tr>
+        <tr><td><strong>Systemic (swarm)</strong></td><td>Budget exhausted, runaway spawning, a child that never returns, one failure cascading up the tree</td><td>No</td><td>Hard limits, deadlines, breakers and partial results. Most of the rest of this chapter.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Notice where the boundaries fall. Infrastructure failures are the easy ones: the HTTP status tells you the class. Model failures are harder because the call <em>succeeded</em>: you got a 200 and a well-formed response, and the problem is in the content. Behavioral failures are the hardest because no single response is wrong. The failure only shows up as a pattern across many steps, so you can only catch it by watching the trajectory.</p>
+
+  <div class="box pitfall">
+    <span class="box-label">Common pitfall</span>
+    <p><strong>Retrying everything.</strong> A blanket <code>retry(3)</code> around the model call retries 400s, auth failures and refusals, which never succeed, and it hides the real problem behind three times the latency and cost. Retry is a decision you make <em>per failure class</em>, not a wrapper you put around everything.</p>
+  </div>
+
+  <h2 id="errors-as-values" data-short="Errors as values">Errors as values</h2>
+  <p>Python's default is to raise an exception and let it climb the stack until something catches it. Inside a single function that's fine. Across a tree of agents it's dangerous: an exception thrown in a grandchild travels up through code that wasn't written to expect it, and it can take the whole run down with it.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 280" role="img" aria-label="Two agent trees side by side. Left: a child raises an exception, which propagates up and crashes the root, and the sibling work is lost. Right: every child returns a Result value, one of them with status failed and kind timeout, and the root receives all three and decides what to do.">
+        <defs>
+          <marker id="f1102-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1102-ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-red" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1102-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1102-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-amber" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-b t-red" x="20" y="24">Exception propagates</text>
+        <text class="t-sm t-muted" x="20" y="40">nobody chose what happens</text>
+        <rect class="n-red" x="110" y="58" width="140" height="44" rx="6"/>
+        <text class="t-b" x="180" y="78" text-anchor="middle">root</text>
+        <text class="t-xs t-red" x="180" y="93" text-anchor="middle">crashed, no answer</text>
+        <rect class="n-ghost" x="20" y="180" width="96" height="44" rx="6"/>
+        <text x="68" y="200" text-anchor="middle">child A</text>
+        <text class="t-xs t-muted" x="68" y="215" text-anchor="middle">work lost</text>
+        <rect class="n-red" x="132" y="180" width="96" height="44" rx="6"/>
+        <text x="180" y="200" text-anchor="middle">child B</text>
+        <text class="t-xs t-red" x="180" y="215" text-anchor="middle">raises Timeout</text>
+        <rect class="n-ghost" x="244" y="180" width="96" height="44" rx="6"/>
+        <text x="292" y="200" text-anchor="middle">child C</text>
+        <text class="t-xs t-muted" x="292" y="215" text-anchor="middle">cancelled</text>
+        <line class="e-red e-dash" x1="180" y1="178" x2="180" y2="106" marker-end="url(#f1102-ahr)"/>
+        <line class="e-muted" x1="68" y1="178" x2="140" y2="104"/>
+        <line class="e-muted" x1="292" y1="178" x2="220" y2="104"/>
+        <text class="t-sm t-muted" x="20" y="256">One child's error decides the fate of the run.</text>
+
+        <line class="e-muted e-dash" x1="360" y1="20" x2="360" y2="262"/>
+
+        <text class="t-b t-accent" x="380" y="24">Result values flow up</text>
+        <text class="t-sm t-muted" x="380" y="40">the parent decides</text>
+        <rect class="n-accent" x="470" y="58" width="160" height="44" rx="6"/>
+        <text class="t-b" x="550" y="78" text-anchor="middle">root</text>
+        <text class="t-xs" x="550" y="93" text-anchor="middle">retry B, skip B, or fail?</text>
+        <rect class="n-plain" x="380" y="180" width="100" height="44" rx="6"/>
+        <text x="430" y="200" text-anchor="middle">child A</text>
+        <text class="t-xs t-accent" x="430" y="215" text-anchor="middle">status: ok</text>
+        <rect class="n-amber" x="500" y="180" width="100" height="44" rx="6"/>
+        <text x="550" y="200" text-anchor="middle">child B</text>
+        <text class="t-xs t-amber" x="550" y="215" text-anchor="middle">failed · timeout</text>
+        <rect class="n-plain" x="620" y="180" width="90" height="44" rx="6"/>
+        <text x="665" y="200" text-anchor="middle">child C</text>
+        <text class="t-xs t-accent" x="665" y="215" text-anchor="middle">status: ok</text>
+        <line class="e-accent" x1="430" y1="178" x2="500" y2="106" marker-end="url(#f1102-aha)"/>
+        <line class="e-amber" x1="550" y1="178" x2="550" y2="106" marker-end="url(#f1102-ahm)"/>
+        <line class="e-accent" x1="665" y1="178" x2="600" y2="106" marker-end="url(#f1102-aha)"/>
+        <text class="t-sm t-muted" x="380" y="256">Every child returns. The failure is a field, not a crash.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 11.2</b>Where the decision lives. On the left, the exception decides. On the right, the parent receives three Results and applies a policy. In Python, <code>asyncio.TaskGroup</code> behaves like the left side by design: the first exception cancels the siblings. That's correct for tightly coupled tasks, and wrong for independent children.</figcaption>
+  </figure>
+
+  <p>The fix is a <strong>boundary</strong>. At the edge of every agent, the harness catches whatever went wrong and converts it into a Result: a plain value that says what happened. Inside the agent, exceptions are fine. Across the boundary, only values travel. The parent never has to guess what a child might throw, because a child can only ever <em>return</em>.</p>
+  <p>Two rules keep the boundary honest:</p>
+  <ul>
+    <li><strong>Never swallow cancellation.</strong> In Python 3.8 and later, <code>asyncio.CancelledError</code> inherits from <code>BaseException</code>, so <code>except Exception</code> doesn't catch it. That's deliberate. If the boundary catches it and returns a Result, the parent's timeout or shutdown silently stops working (ch10). Let cancellation pass through, or record it and re-raise.</li>
+    <li><strong>Keep the error's class.</strong> A Result that only says <code>"error: something went wrong"</code> throws away the one fact the parent needs: was it transient or permanent? Keep a machine-readable kind next to the human-readable message.</li>
+  </ul>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Stage 2.</strong> Your plan says “a failed child becomes a failed Result”. Before you write the type, list the fields a parent needs to <em>decide</em> something. Which statuses are distinct (failed vs timeout vs cancelled vs budget exceeded vs partial)? Does a parent react differently to each? If not, why keep them separate?</li>
+      <li><strong>Stage 2.</strong> Should a failed Result still carry the tokens and time the child spent? Who reads that number, and what goes wrong in the cost report if it's missing?</li>
+      <li><strong>Stage 3.</strong> You'll run children concurrently. Will you use <code>gather</code> or a <code>TaskGroup</code>? Write down which failure semantics you actually want for independent children before you pick the API.</li>
+    </ul>
+  </div>
+
+  <h2 id="retries" data-short="Retries and backoff">Retries, backoff and jitter</h2>
+  <p>For transient failures, trying again is the right move. How you try again is where most of the engineering lives. Three ideas matter.</p>
+  <dl class="defs">
+    <dt>Exponential backoff</dt>
+    <dd>Wait longer after each failure: 1 s, then 2 s, then 4 s, up to a cap. If the provider is overloaded, hammering it at a fixed interval keeps it overloaded. Backing off gives it room to recover.</dd>
+    <dt>Jitter</dt>
+    <dd>Add randomness to each wait. Without it, every client that failed at the same moment retries at the same moment, and the retries arrive as a synchronized spike. This is the <em>thundering herd</em>. A swarm creates the herd itself: ten children launched together all hit the same rate limit together.</dd>
+    <dt>A stopping rule</dt>
+    <dd>Limit the number of attempts <em>and</em> the total time spent retrying. Four attempts with a 60-second cap can take over a minute, and that minute has to fit inside the caller's deadline.</dd>
+  </dl>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 250" role="img" aria-label="Timeline of retries from five clients over 16 seconds. Without jitter, all five retry at exactly 1, 3, 7 and 15 seconds, forming four vertical spikes. With full jitter, the same five clients' retries are scattered across the timeline.">
+        <text class="t-b" x="20" y="30">no jitter</text>
+        <text class="t-xs t-muted" x="20" y="46">delay = 2<tspan baseline-shift="super" font-size="8">attempt</tspan> s</text>
+        <text class="t-xs t-muted" x="20" y="62">5 clients</text>
+        <rect class="n-sunken" x="120" y="38" width="560" height="70" rx="4"/>
+        <circle class="fill-red" cx="155" cy="48" r="4"/><circle class="fill-red" cx="155" cy="60" r="4"/><circle class="fill-red" cx="155" cy="72" r="4"/><circle class="fill-red" cx="155" cy="84" r="4"/><circle class="fill-red" cx="155" cy="96" r="4"/>
+        <circle class="fill-red" cx="225" cy="48" r="4"/><circle class="fill-red" cx="225" cy="60" r="4"/><circle class="fill-red" cx="225" cy="72" r="4"/><circle class="fill-red" cx="225" cy="84" r="4"/><circle class="fill-red" cx="225" cy="96" r="4"/>
+        <circle class="fill-red" cx="365" cy="48" r="4"/><circle class="fill-red" cx="365" cy="60" r="4"/><circle class="fill-red" cx="365" cy="72" r="4"/><circle class="fill-red" cx="365" cy="84" r="4"/><circle class="fill-red" cx="365" cy="96" r="4"/>
+        <circle class="fill-red" cx="645" cy="48" r="4"/><circle class="fill-red" cx="645" cy="60" r="4"/><circle class="fill-red" cx="645" cy="72" r="4"/><circle class="fill-red" cx="645" cy="84" r="4"/><circle class="fill-red" cx="645" cy="96" r="4"/>
+        <text class="t-xs t-red" x="375" y="30">all five retries land together, every time</text>
+
+        <text class="t-b" x="20" y="140">full jitter</text>
+        <text class="t-xs t-muted" x="20" y="156">delay = random(0,</text>
+        <text class="t-xs t-muted" x="34" y="170">2<tspan baseline-shift="super" font-size="8">attempt</tspan>) s</text>
+        <text class="t-xs t-muted" x="20" y="186">same 5 clients</text>
+        <rect class="n-sunken" x="120" y="138" width="560" height="70" rx="4"/>
+        <circle class="fill-accent" cx="134" cy="148" r="4"/><circle class="fill-accent" cx="186" cy="148" r="4"/><circle class="fill-accent" cx="278" cy="148" r="4"/><circle class="fill-accent" cx="512" cy="148" r="4"/>
+        <circle class="fill-accent" cx="148" cy="160" r="4"/><circle class="fill-accent" cx="166" cy="160" r="4"/><circle class="fill-accent" cx="292" cy="160" r="4"/><circle class="fill-accent" cx="435" cy="160" r="4"/>
+        <circle class="fill-accent" cx="127" cy="172" r="4"/><circle class="fill-accent" cx="194" cy="172" r="4"/><circle class="fill-accent" cx="229" cy="172" r="4"/><circle class="fill-accent" cx="491" cy="172" r="4"/>
+        <circle class="fill-accent" cx="152" cy="184" r="4"/><circle class="fill-accent" cx="215" cy="184" r="4"/><circle class="fill-accent" cx="341" cy="184" r="4"/><circle class="fill-accent" cx="404" cy="184" r="4"/>
+        <circle class="fill-accent" cx="141" cy="196" r="4"/><circle class="fill-accent" cx="159" cy="196" r="4"/><circle class="fill-accent" cx="260" cy="196" r="4"/><circle class="fill-accent" cx="523" cy="196" r="4"/>
+
+        <line class="e-muted" x1="120" y1="222" x2="680" y2="222"/>
+        <line class="e-muted" x1="120" y1="218" x2="120" y2="226"/><text class="t-xs t-muted" x="120" y="240" text-anchor="middle">0 s</text>
+        <line class="e-muted" x1="260" y1="218" x2="260" y2="226"/><text class="t-xs t-muted" x="260" y="240" text-anchor="middle">4 s</text>
+        <line class="e-muted" x1="400" y1="218" x2="400" y2="226"/><text class="t-xs t-muted" x="400" y="240" text-anchor="middle">8 s</text>
+        <line class="e-muted" x1="540" y1="218" x2="540" y2="226"/><text class="t-xs t-muted" x="540" y="240" text-anchor="middle">12 s</text>
+        <line class="e-muted" x1="680" y1="218" x2="680" y2="226"/><text class="t-xs t-muted" x="680" y="240" text-anchor="middle">16 s</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 11.3</b>Why jitter matters. Each row is one client, each dot one retry. The jittered times are illustrative, but each wait respects its ceiling of 1, 2, 4 and 8 seconds. Jitter doesn't reduce the number of retries. It spreads them out so the provider sees a steady trickle instead of four spikes.</figcaption>
+  </figure>
+
+  <div class="formula">wait = random(0, min(cap, base × 2<sup>attempt</sup>))</div>
+  <p>That's “full jitter”, from Marc Brooker's analysis of retry strategies (see Sources). It completes the work with fewer total calls than backoff without jitter. When the provider tells you how long to wait, for example with a <code>retry-after</code> header on a 429, prefer its number over yours.</p>
+
+  <h3>Retries multiply across layers</h3>
+  <p>Here's predict question 2. If the model client makes 3 attempts, and the child wraps <em>its</em> work in 3 attempts, and the parent wraps the child in 3 attempts, one bottom-level outage produces 3 × 3 × 3 = <strong>27</strong> requests. That's for a single grandchild call. Multiply by the fan-out and a swarm can turn a 30-second provider blip into thousands of requests that keep the outage going. This is <em>retry amplification</em>.</p>
+  <ul>
+    <li><strong>Retry at one layer.</strong> Usually that's the lowest layer that can see the failure class, which is the model client or the tool executor. Higher layers receive a failed Result and make a <em>different</em> decision, such as re-plan, skip or fail. They don't blindly repeat.</li>
+    <li><strong>Know what your SDK already does.</strong> Provider SDKs commonly retry some errors on their own. The Anthropic Python SDK, for example, retries a small number of times by default and lets you set <code>max_retries</code>. Wrap it in your own retry loop without checking, and you've already multiplied.</li>
+    <li><strong>Use a retry budget.</strong> Google's SRE book describes capping retries as a fraction of all requests (around 10% per client). When retries exceed the budget, the client stops retrying and fails fast, because at that point the problem is clearly not transient.</li>
+  </ul>
+
+  <h2 id="idempotency">Idempotency</h2>
+  <p>An operation is <strong>idempotent</strong> if doing it twice has the same effect as doing it once. Setting <code>status = "done"</code> is idempotent. Appending a row, sending an email, charging a card and spawning a child agent are not.</p>
+  <p>This matters because <em>a timeout doesn't tell you what happened</em>. When the 30-second email call in predict question 3 times out, there are three possibilities:</p>
+  <ol>
+    <li>The request never arrived. Retrying is correct.</li>
+    <li>It arrived, the email was sent, and the response was lost on the way back. Retrying sends a second email.</li>
+    <li>It's still running. Retrying may send a second email in a few seconds.</li>
+  </ol>
+  <p>From the caller's side, all three look identical. So the honest answer to predict question 3 is: retry only if the operation is idempotent, or can be made idempotent.</p>
+
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Tool kind</th><th>Examples</th><th>Safe to retry blindly?</th><th>How to make retries safe</th></tr></thead>
+      <tbody>
+        <tr><td>Read-only</td><td>search, read file, GET</td><td>Yes</td><td>Nothing needed, apart from cost</td></tr>
+        <tr><td>Idempotent write</td><td>write file with full content, PUT, set a field</td><td>Yes</td><td>Make sure the tool really is idempotent, not just named like it</td></tr>
+        <tr><td>Non-idempotent write</td><td>append, send, pay, create ticket</td><td>No</td><td>An idempotency key the receiver uses to drop duplicates, or a check before acting</td></tr>
+        <tr><td>Spawn a child agent</td><td>delegate a subtask</td><td>No</td><td>Register the spawn under a deterministic id first; on retry, look it up before creating another</td></tr>
+        <tr><td>Model call</td><td>messages.create</td><td>No side effects, but costs tokens and may answer differently</td><td>Record the response as an event; on replay, reuse it instead of calling again (ch09)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>An <strong>idempotency key</strong> is an id for the <em>logical</em> operation, not for one attempt. The caller sends the same key with every retry, and the receiver remembers keys it has already completed. For a harness, a good key is derived from things that stay the same across a replay, such as the run id, the agent id, the step number and the call's position in that step. A random UUID generated at call time is a bad key: the retry generates a new one, and the duplicate gets through.</p>
+
+  <div class="box note">
+    <span class="box-label">Note</span>
+    <p>Model calls look safe to retry because they have no side effects. They aren't free, though. A retried call can return a <em>different</em> answer, and if the first answer was already logged and partly acted on, your history now contradicts itself. That's why durable-execution systems record each model response as an event and replay it rather than call the model again.</p>
+  </div>
+
+  <h2 id="timeouts">Timeouts at every level</h2>
+  <p>Every <code>await</code> on something outside your process needs a bound. A call with no timeout can hang forever, and here's the trap: <strong>a hung call spends no tokens</strong>. Your token budget never fires, your step counter never advances, and the run sits there until a human notices. Only a clock catches a hang.</p>
+  <p>Timeouts exist at several levels, and they nest:</p>
+  <ul>
+    <li><strong>Connection and read</strong> timeouts on each HTTP request.</li>
+    <li><strong>Per call</strong>: one model call or one tool call.</li>
+    <li><strong>Per agent</strong>: total wall time for an agent, including all its steps and children.</li>
+    <li><strong>Per run</strong>: the deadline for the whole tree.</li>
+  </ul>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 240" role="img" aria-label="Nested deadlines on a 0 to 300 second timeline. The run has a 300 second deadline. Child A starts at 40 seconds with a 120 second limit and ends by 160 seconds. A model call inside child A starts at 100 seconds with a 60 second timeout, which also ends at 160. Child B starts at 230 seconds and wants 120 seconds, but only 70 remain before the run deadline, so its deadline is clipped to 300 seconds.">
+        <text class="t-xs t-caps t-muted" x="20" y="22">level</text>
+        <text class="t-xs t-caps t-muted" x="140" y="22">time since the run started</text>
+
+        <text class="t-sm" x="20" y="52">run</text>
+        <rect class="n-group" x="140" y="36" width="480" height="24" rx="4"/>
+        <text class="t-xs" x="150" y="52">deadline 300 s</text>
+
+        <text class="t-sm" x="20" y="92">child A</text>
+        <rect class="n-accent" x="204" y="76" width="192" height="24" rx="4"/>
+        <text class="t-xs" x="212" y="92">40 s → 160 s (limit 120 s)</text>
+
+        <text class="t-sm" x="20" y="132">A's model call</text>
+        <rect class="n-violet" x="300" y="116" width="96" height="24" rx="4"/>
+        <text class="t-xs" x="306" y="132">timeout 60 s</text>
+        <text class="t-xs t-muted" x="404" y="132">fits inside A</text>
+
+        <text class="t-sm" x="20" y="172">child B</text>
+        <rect class="n-amber" x="508" y="156" width="112" height="24" rx="4"/>
+        <rect class="n-ghost" x="620" y="156" width="80" height="24" rx="4"/>
+        <text class="t-xs" x="514" y="172">gets 70 s</text>
+        <text class="t-xs t-red" x="626" y="172">clipped</text>
+        <text class="t-xs t-muted" x="300" y="172" text-anchor="start">starts 230 s, wants 120 s</text>
+
+        <line class="e-red e-dash" x1="620" y1="30" x2="620" y2="200"/>
+        <text class="t-xs t-red" x="626" y="44">run deadline</text>
+
+        <line class="e-muted" x1="140" y1="206" x2="620" y2="206"/>
+        <text class="t-xs t-muted" x="140" y="222" text-anchor="middle">0</text>
+        <text class="t-xs t-muted" x="300" y="222" text-anchor="middle">100 s</text>
+        <text class="t-xs t-muted" x="460" y="222" text-anchor="middle">200 s</text>
+        <text class="t-xs t-muted" x="620" y="222" text-anchor="middle">300 s</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 11.4</b>Nested deadlines, to scale. The rule is <strong>child deadline = min(child's own limit, parent's deadline)</strong>. Child B asked for 120 seconds and got 70. If B didn't know about the run deadline, it would plan for work it can't finish, and the run would cut it off mid-step instead of letting it return a partial result.</figcaption>
+  </figure>
+
+  <p>Two practical consequences:</p>
+  <ul>
+    <li><strong>Pass deadlines, not durations.</strong> “Finish by 14:05:00” stays correct as it travels down the tree. “You have 60 seconds” is wrong as soon as it's been queued for 10 seconds. Each level computes its remaining time from the absolute deadline it was given.</li>
+    <li><strong>Leave room to report.</strong> An agent that uses its whole allowance has no time left to return a useful partial result. A common pattern is a soft deadline, where the agent is told to wrap up, ahead of the hard deadline, where the harness cancels it.</li>
+  </ul>
+  <p>Pick values from measured latency, not guesses. Model latency grows with the number of output tokens, so a call that writes a long plan has a much longer tail than a call that picks a route. Chapter 13 shows how to record the latencies you need to choose these numbers.</p>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Stage 3.</strong> Where does the deadline live: in the agent's state, in an argument to every call, or in a context variable? What does each choice make easy or hard when a child spawns a grandchild?</li>
+      <li><strong>Stage 3.</strong> When a timeout fires, cancellation runs your <code>finally</code> blocks. What does a timed-out child write to the trace before it exits, and how will you test that it actually does?</li>
+      <li><strong>Stage 6.</strong> Choose <em>one</em> layer to own retries. Write a sentence that justifies it, and a test that fails if a second layer starts retrying too.</li>
+    </ul>
+  </div>
+
+  <h2 id="budgets">Budgets and where they are enforced</h2>
+  <p>A timeout bounds <em>time</em>. A budget bounds <em>spend</em>. A run needs both: a fast agent can burn a large token budget in a minute, and a hung agent can sit inside its token budget forever. The things worth metering are:</p>
+  <div class="cols-3">
+    <div class="card"><p><strong>Tokens</strong>: input and output separately. Input grows fastest, because every step resends the history (ch01).</p></div>
+    <div class="card"><p><strong>Steps</strong>: model calls per agent. A simple backstop against loops.</p></div>
+    <div class="card"><p><strong>Wall time</strong>: the deadline from the previous section.</p></div>
+    <div class="card"><p><strong>Agents</strong>: total spawned, depth and fan-out. These bound the shape of the tree.</p></div>
+    <div class="card"><p><strong>Cost</strong>: tokens multiplied by price. Keep prices in config, because they change.</p></div>
+    <div class="card"><p><strong>Tool calls</strong>: especially calls with external cost or side effects.</p></div>
+  </div>
+  <p>Defining a budget is easy. The hard part is choosing <em>where in the loop</em> it's checked, because a check in the wrong place records the overspend instead of preventing it.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 270" role="img" aria-label="The agent loop with four budget enforcement points. Point 1, before the model call, checks that the worst-case cost fits. Point 2, after the call, charges the actual usage. Point 3, before a spawn, reserves the child's share. Point 4, when the child returns, refunds what it didn't use. All four talk to a single budget meter.">
+        <defs>
+          <marker id="f1105-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <path d="M650,58 V30 H80 V56" marker-end="url(#f1105-ah)"/>
+        <text class="t-xs t-muted" x="365" y="24" text-anchor="middle">next step</text>
+
+        <rect class="n-plain" x="20" y="60" width="120" height="44" rx="6"/>
+        <text class="t-sm" x="80" y="86" text-anchor="middle">decide next step</text>
+        <line x1="140" y1="82" x2="168" y2="82" marker-end="url(#f1105-ah)"/>
+        <rect class="n-amber" x="170" y="62" width="120" height="40" rx="6"/>
+        <text class="t-sm t-b" x="230" y="79" text-anchor="middle">① check</text>
+        <text class="t-xs" x="230" y="94" text-anchor="middle">worst case fits?</text>
+        <line x1="290" y1="82" x2="318" y2="82" marker-end="url(#f1105-ah)"/>
+        <rect class="n-plain" x="320" y="60" width="110" height="44" rx="6"/>
+        <text x="375" y="86" text-anchor="middle">model call</text>
+        <line x1="430" y1="82" x2="458" y2="82" marker-end="url(#f1105-ah)"/>
+        <rect class="n-amber" x="460" y="62" width="110" height="40" rx="6"/>
+        <text class="t-sm t-b" x="515" y="79" text-anchor="middle">② charge</text>
+        <text class="t-xs" x="515" y="94" text-anchor="middle">actual usage</text>
+        <line x1="570" y1="82" x2="598" y2="82" marker-end="url(#f1105-ah)"/>
+        <rect class="n-plain" x="600" y="60" width="100" height="44" rx="6"/>
+        <text class="t-sm" x="650" y="79" text-anchor="middle">tool call</text>
+        <text class="t-sm" x="650" y="96" text-anchor="middle">or spawn</text>
+
+        <line x1="650" y1="104" x2="650" y2="138" marker-end="url(#f1105-ah)"/>
+        <text class="t-xs t-muted" x="656" y="124">spawn</text>
+        <rect class="n-amber" x="590" y="140" width="120" height="40" rx="6"/>
+        <text class="t-sm t-b" x="650" y="157" text-anchor="middle">③ reserve</text>
+        <text class="t-xs" x="650" y="172" text-anchor="middle">child's share first</text>
+        <line x1="650" y1="180" x2="650" y2="206" marker-end="url(#f1105-ah)"/>
+        <rect class="n-violet" x="600" y="208" width="100" height="36" rx="6"/>
+        <text class="t-sm" x="650" y="231" text-anchor="middle">child agent</text>
+
+        <rect class="n-accent" x="250" y="170" width="240" height="60" rx="8"/>
+        <text class="t-b" x="370" y="194" text-anchor="middle">budget meter</text>
+        <text class="t-xs" x="370" y="212" text-anchor="middle">tokens · steps · time · agents · cost</text>
+        <line class="e-amber e-dash" x1="230" y1="102" x2="300" y2="168"/>
+        <line class="e-amber e-dash" x1="515" y1="102" x2="440" y2="168"/>
+        <line class="e-amber e-dash" x1="590" y1="160" x2="492" y2="182"/>
+        <line class="e-amber e-dash" x1="600" y1="226" x2="492" y2="214"/>
+        <text class="t-xs t-amber" x="500" y="248">④ refund unused</text>
+
+        <text class="t-xs t-muted" x="20" y="160">① and ③ stop spend before it happens.</text>
+        <text class="t-xs t-muted" x="20" y="176">② records what was really spent.</text>
+        <text class="t-xs t-muted" x="20" y="192">④ returns what a child didn't use.</text>
+        <text class="t-xs t-muted" x="20" y="208">Check and deduct with no await between.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 11.5</b>Four enforcement points around one budget meter. Point ① can know the worst case before the call: the input token count, plus <code>max_tokens</code> as a ceiling on output. Point ② then charges the real numbers from the response's <code>usage</code> field.</figcaption>
+  </figure>
+
+  <p>The most common budget bug in a concurrent harness comes straight from chapter 10. Two children each check “are at least 5,000 tokens left?”. Both see 8,000, both pass, both spend 5,000, and the run is 2,000 over. The check and the spend were separated by an <code>await</code>, and another task ran in between. The fix is a <strong>reservation</strong>: check and deduct in a single step with no <code>await</code> inside it, then refund the difference once the real usage is known.</p>
+  <p>Budgets also need a policy for what happens as they run out:</p>
+  <ul>
+    <li><strong>Soft limit</strong>, for example at 80%: tell the agent, through its context, to wrap up and report what it has.</li>
+    <li><strong>Hard limit</strong> at 100%: the harness stops the agent, whatever the agent thinks, and returns a Result with a <code>budget_exceeded</code> status and whatever partial output exists.</li>
+  </ul>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Stage 2.</strong> Is there one budget meter for the whole run, or one per agent that rolls up? Draw both for depth 2. Which one makes “the run spent at most N tokens” easy to <em>prove</em>?</li>
+      <li><strong>Stage 3.</strong> Write the test first: launch 10 children concurrently against a budget that only fits 6. What exact outcome should the test assert?</li>
+      <li><strong>Stage 4.</strong> How will point ① estimate the cost of a call before making it? Which part of the estimate is exact, and which is a ceiling?</li>
+    </ul>
+  </div>
+
+  <h2 id="validation" data-short="Validation and guardrails">Validating output, and guardrails</h2>
+  <p>Chapter 01 introduced four checks on model output, in order: <strong>syntax</strong> (does it parse?), <strong>schema</strong> (right fields and types?), <strong>semantics</strong> (does it make sense in this world, for example does the file exist?), and <strong>policy</strong> (is it allowed?). This chapter adds what to do when one fails.</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Check fails</th><th>Example</th><th>Response</th></tr></thead>
+      <tbody>
+        <tr><td>Syntax</td><td>Output isn't valid JSON</td><td>Repair loop: re-ask once with the parser's exact error. Often fixed by strict tool schemas instead.</td></tr>
+        <tr><td>Schema</td><td><code>subtasks</code> is a string, not a list</td><td>Repair loop with the validator's message, which names the field.</td></tr>
+        <tr><td>Semantics</td><td>A plan with 40 subtasks when the fan-out limit is 5; two subtasks that are the same</td><td>Re-plan with the rule stated explicitly, or clip and record it. Never silently accept.</td></tr>
+        <tr><td>Policy</td><td>A tool call that writes outside the workspace</td><td>Reject. Don't ask the model to try again until it finds a version that slips past (ch12).</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>A <strong>repair loop</strong> is different from a retry. A retry sends the same input and hopes for a different outcome. A repair sends a <em>new</em> input that contains the specific error, so the model has something to fix. Bound it to one or two rounds. If the model can't produce valid output after two precise corrections, a third rarely helps, and the loop becomes a cost leak.</p>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>The model proposes, the framework disposes</strong> (spec 2.2). A plan from the planner is a <em>proposal</em>. Your validator decides whether it runs. That decision lives in code you can test, not in a sentence in the prompt you can only hope the model follows.</p>
+  </div>
+
+  <h3>Guardrails</h3>
+  <p>A <strong>guardrail</strong> is a check that runs <em>around</em> the agent rather than inside its reasoning. There are three positions for one:</p>
+  <ul>
+    <li><strong>Input guardrails</strong> run before the model sees something, for example rejecting a request that's off-topic for this agent.</li>
+    <li><strong>Tool guardrails</strong> run between the model's <code>tool_use</code> and the actual execution. They check an allowlist, the argument ranges and the permissions. This is the most important position, because it's the last point before something happens in the world.</li>
+    <li><strong>Output guardrails</strong> run before a result leaves the agent: to the parent, to the user, or to an external system.</li>
+  </ul>
+  <p>A guardrail can be plain code (a regex, a schema, an allowlist) or a separate, cheaper model acting as a classifier. Code is deterministic and testable, so use it wherever the rule can be written down. Use a classifier model only where the rule can't, and remember that it's another fallible component, with its own failure rate and its own exposure to injection (ch12).</p>
+
+  <h2 id="circuit-breakers" data-short="Circuit breakers">Circuit breakers</h2>
+  <p>Retries handle a blip. They make an outage worse. When the provider is actually down, every agent in the swarm keeps trying: each call waits through its full timeout, retries with backoff, and fails. Children pile up waiting, deadlines expire, and the provider gets hammered just when it's trying to recover.</p>
+  <p>A <strong>circuit breaker</strong> watches calls to one dependency and stops sending them once failures cross a threshold. It's named after the electrical part, and was popularized for software by Michael Nygard's <em>Release It!</em>.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 240" role="img" aria-label="Circuit breaker state machine. Closed: calls pass through. When failures cross a threshold, it moves to open: calls fail fast and no request is sent. After a cooldown, it moves to half-open, which allows one trial call. If the trial succeeds it goes back to closed; if it fails it goes back to open.">
+        <defs>
+          <marker id="f1106-ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-red" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1106-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-amber" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f1106-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="n-accent" x="80" y="70" width="140" height="50" rx="25"/>
+        <text class="t-b t-caps" x="150" y="92" text-anchor="middle">closed</text>
+        <text class="t-xs" x="150" y="108" text-anchor="middle">calls pass through</text>
+
+        <rect class="n-red" x="500" y="70" width="140" height="50" rx="25"/>
+        <text class="t-b t-caps" x="570" y="92" text-anchor="middle">open</text>
+        <text class="t-xs" x="570" y="108" text-anchor="middle">fail fast, no call sent</text>
+
+        <rect class="n-amber" x="280" y="165" width="160" height="50" rx="25"/>
+        <text class="t-b t-caps" x="360" y="187" text-anchor="middle">half-open</text>
+        <text class="t-xs" x="360" y="203" text-anchor="middle">allow one trial call</text>
+
+        <path class="e-red" d="M220,82 Q360,20 500,82" marker-end="url(#f1106-ahr)"/>
+        <text class="t-sm t-red" x="360" y="42" text-anchor="middle">failure count crosses the threshold</text>
+        <path class="e-amber" d="M550,120 Q545,180 442,186" marker-end="url(#f1106-ahm)"/>
+        <text class="t-sm t-amber" x="500" y="150" text-anchor="end">cooldown elapsed</text>
+        <path class="e-accent" d="M280,190 Q160,195 150,122" marker-end="url(#f1106-aha)"/>
+        <text class="t-sm t-accent" x="20" y="160">trial succeeds</text>
+        <path class="e-red" d="M440,205 Q640,215 615,122" marker-end="url(#f1106-ahr)"/>
+        <text class="t-sm t-red" x="640" y="196">trial fails</text>
+        <text class="t-sm t-muted" x="20" y="234">Share one breaker per dependency across the whole swarm, so every agent benefits from the first failures.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 11.6</b>The three states of a circuit breaker. In the open state, a call fails in microseconds instead of after a 60-second timeout. Agents get a fast, clear Result such as “provider unavailable” and can degrade gracefully instead of queueing behind a dead dependency.</figcaption>
+  </figure>
+
+  <p>Compare it with the retry loop. A <strong>retry</strong> is optimistic and works on one call: “that probably was a blip”. A <strong>breaker</strong> is pessimistic and works across calls: “the last 20 calls tell me this isn't a blip”. You want both, and the breaker sits outside the retry, so an open breaker stops the retries too.</p>
+  <p>In a swarm, where the breaker lives matters. With one breaker per agent, each of 50 agents has to discover the outage separately. With one breaker per dependency (one for the model provider, one for each external API), the first few failures protect everyone. That breaker is shared mutable state, so it raises the same concurrency questions as the budget meter.</p>
+
+  <h2 id="degradation" data-short="Graceful degradation">Graceful degradation and partial results</h2>
+  <p>A parent sends out five children. Four come back with <code>status: ok</code> and one times out. The parent has four options, and choosing between them is a policy decision you make in advance, not something to improvise at run time:</p>
+  <ol>
+    <li><strong>Fail the whole task.</strong> Correct when every part is essential, for example all the steps of a migration.</li>
+    <li><strong>Retry or replace the failed child</strong>, if there's time and budget left, and the failure was transient.</li>
+    <li><strong>Return a partial result</strong> that says exactly what is missing and why.</li>
+    <li><strong>Fall back</strong> to something cheaper: a smaller model, a cached answer, a simpler method.</li>
+  </ol>
+  <p>The policy is much easier to write if every subtask is marked <strong>required</strong> or <strong>optional</strong> when it's planned. A failed required child fails the parent, or triggers a re-plan. A failed optional child leaves a documented gap. The planner can propose the marks, and your validator can check them, but someone has to decide them before the run, not after.</p>
+
+  <div class="box pitfall">
+    <span class="box-label">Common pitfall</span>
+    <p><strong>The silent gap.</strong> The parent asks the model to “write the final answer from these results”, and one result is an error message. The model, trying to be helpful, writes a confident, complete-looking answer that simply leaves that part out, or worse, invents it. A partial result that looks complete is more dangerous than an honest failure. Make coverage a field the harness fills in (“3 of 4 sections; the cost analysis child timed out”), not something the model may or may not mention.</p>
+  </div>
+  <p>Every fallback should be visible too. If the answer came from the smaller model because the breaker was open, the Result should say so. Otherwise your evaluations in chapter 13 will measure a mix of two systems and you won't know it.</p>
+
+  <h2 id="loops" data-short="Loop detection">Loop detection</h2>
+  <p>Behavioral failures don't show up in any single response. Each call looks reasonable, and the problem is the pattern. The harness has to watch the trajectory for signals such as these:</p>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Signal</th><th>How to detect it in code</th></tr></thead>
+      <tbody>
+        <tr><td>Same call, again and again</td><td>Hash the tool name plus canonical JSON of the arguments. Count repeats within a window.</td></tr>
+        <tr><td>Same error, again and again</td><td>Count consecutive <code>is_error</code> results with the same error kind.</td></tr>
+        <tr><td>Oscillation (A, B, A, B)</td><td>Look for a repeating cycle in the last few action hashes.</td></tr>
+        <tr><td>No progress</td><td>Steps keep coming but the state (files written, facts gathered, subtasks completed) doesn't change.</td></tr>
+        <tr><td><strong>Delegating the same task</strong></td><td>A child proposes a subtask that matches its own task, exactly or almost. Swarm-specific, and it recurses until a depth limit stops it.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>The response is usually two-step. First, tell the agent, through an observation, what you've seen: “you've called <code>search</code> with these exact arguments 3 times, and the result won't change”. Models often recover once the pattern is pointed out. If the pattern continues, stop the agent and return a Result that says why. Loop detection is a heuristic, though. It will miss loops it wasn't designed to recognize, which is why it can't be the only stopping mechanism.</p>
+
+  <div class="box stop">
+    <span class="box-label">Checkpoint · Round 2, question 3</span>
+    <p><strong>Stop here.</strong> Answer this in <code>docs/LEARNING_NOTES.md</code> before you read the next section. It's the question from your Round 2 list.</p>
+    <ol>
+      <li>Name at least three separate mechanisms that stop runaway recursion in a swarm.</li>
+      <li>Which one do you trust least, and why?</li>
+      <li>With a depth limit of 3 and a fan-out limit of 10, what's the maximum total number of agents, counting the root? Show the arithmetic.</li>
+    </ol>
+    <p>Write your answers before you scroll. The next section answers parts 1 and 2. For part 3, check your arithmetic against the growth math in chapter 16.</p>
+  </div>
+
+  <h2 id="stopping" data-short="Stopping runaway recursion">Stopping runaway recursion</h2>
+  <p>An agent that can spawn agents can, in principle, spawn forever. Every layer in this chapter contributes a brake. They aren't equally strong, and the useful way to rank them is to ask: <strong>can a confused, wrong or manipulated model get around it?</strong></p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 282" role="img" aria-label="Seven stopping mechanisms ranked by how much they can be trusted. Four hard limits, which the model cannot get around: the run deadline and kill switch, depth, agent-count and fan-out limits, the budget pool, and per-agent step limits and timeouts. Two heuristics that can miss: loop detection and plan validation. And the least trusted: an instruction in the prompt, which the model can ignore.">
+        <text class="t-xs t-caps t-muted" x="20" y="22">mechanism, most trusted first</text>
+        <text class="t-xs t-caps t-muted" x="345" y="22">enforced by</text>
+        <text class="t-xs t-caps t-muted" x="530" y="22">can the model get around it?</text>
+
+        <rect class="n-accent" x="20" y="32" width="310" height="26" rx="4"/>
+        <text class="t-sm" x="32" y="49">Run deadline and operator kill switch</text>
+        <text class="t-sm" x="345" y="49">outside the run</text>
+        <text class="t-sm t-accent t-b" x="530" y="49">No</text>
+
+        <rect class="n-accent" x="20" y="64" width="310" height="26" rx="4"/>
+        <text class="t-sm" x="32" y="81">Depth, agent-count and fan-out limits</text>
+        <text class="t-sm" x="345" y="81">harness, before create</text>
+        <text class="t-sm t-accent t-b" x="530" y="81">No</text>
+
+        <rect class="n-accent" x="20" y="96" width="310" height="26" rx="4"/>
+        <text class="t-sm" x="32" y="113">Budget pool: tokens and cost</text>
+        <text class="t-sm" x="345" y="113">budget meter</text>
+        <text class="t-sm t-accent t-b" x="530" y="113">No</text>
+
+        <rect class="n-accent" x="20" y="128" width="310" height="26" rx="4"/>
+        <text class="t-sm" x="32" y="145">Step limits and timeouts per agent</text>
+        <text class="t-sm" x="345" y="145">loop driver</text>
+        <text class="t-sm t-accent t-b" x="530" y="145">No</text>
+
+        <rect class="n-amber" x="20" y="160" width="310" height="26" rx="4"/>
+        <text class="t-sm" x="32" y="177">Loop and duplicate-task detection</text>
+        <text class="t-sm" x="345" y="177">harness heuristic</text>
+        <text class="t-sm t-amber t-b" x="530" y="177">No, but it can miss</text>
+
+        <rect class="n-amber" x="20" y="192" width="310" height="26" rx="4"/>
+        <text class="t-sm" x="32" y="209">Plan validation</text>
+        <text class="t-sm" x="345" y="209">validator on the plan</text>
+        <text class="t-sm t-amber t-b" x="530" y="209">Only via a rule gap</text>
+
+        <rect class="n-red" x="20" y="224" width="310" height="26" rx="4"/>
+        <text class="t-sm" x="32" y="241">“Don't spawn too many” in the prompt</text>
+        <text class="t-sm" x="345" y="241">the model itself</text>
+        <text class="t-sm t-red t-b" x="530" y="241">Yes: it's a request</text>
+
+        <text class="t-xs t-muted" x="20" y="272">The top four are hard limits. They hold even when the model is confused, wrong or injected, because the model never gets a vote.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 11.7</b>Defense in depth for recursion. No single row is enough on its own, but the order matters: the further down a mechanism sits, the less you should rely on it for <em>safety</em>, as opposed to efficiency.</figcaption>
+  </figure>
+
+  <p>The prompt instruction is the least trustworthy for four separate reasons. The model may misjudge what “too many” means for this task. It may lose the instruction in a long context. An injected document can override it (ch12). And every child gets its own prompt, so the instruction has to survive being passed down the tree, which is the telephone game from chapter 16. The instruction is still worth having: a model that rarely over-spawns makes the hard limits fire less often, which saves money. Just never count it as a <em>guarantee</em>.</p>
+  <p>Two details decide whether the hard limits actually work:</p>
+  <ul>
+    <li><strong>Check at create time, not run time.</strong> A depth or count limit checked after the child has started has already let it spend. The check belongs between “the model proposed a spawn” and “the harness created an agent”.</li>
+    <li><strong>A rejected spawn is an observation, not a crash.</strong> Tell the model, as a tool result, that the limit was reached, so it can do the work itself or return a partial result. A raw exception would only turn a limit into a failure.</li>
+  </ul>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>You should be able to prove your run terminates.</strong> With a depth limit and a fan-out limit, the tree is finite. With a step limit and a deadline on every agent, every node finishes. Put those together and the run must end, whatever the model does. If you can't write that argument for your harness in three sentences, one of the hard limits is missing.</p>
+  </div>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Stage 2.</strong> Which of the limits in Figure 11.7 exist in your plan today? For each one, name the function where it's checked, and confirm the check runs before an agent is created.</li>
+      <li><strong>Stage 2.</strong> When a spawn is rejected, what exactly does the model see? Write the text of that tool result before you write the code.</li>
+      <li><strong>Stage 4.</strong> Your fake LLM is a perfect adversary. Script one that <em>always</em> proposes the maximum fan-out, and one that delegates its own task unchanged. What should each run produce?</li>
+      <li><strong>Stage 6.</strong> Failure injection: list one injected fault for each row of the taxonomy table (a 529, a hang, invalid JSON, a repeated call, a runaway planner). Which layer should catch each one, and what does the trace look like when it does?</li>
+    </ul>
+  </div>
+
+  <h2 id="check">Check yourself</h2>
+  <p>Answer each one out loud or on paper before you open it.</p>
+  <div class="quiz">
+    <details><summary><span class="tag recall">Recall</span> What single question separates transient failures from permanent ones? Give two examples of each.</summary><div><p>“Would sending exactly the same request again plausibly succeed?” Transient: a 429 rate limit, a 529 overloaded response, a connection reset, a read timeout. Permanent: a 400 invalid request, a 401 auth failure, a prompt over the context limit, a refusal. Retry only the first group.</p></div></details>
+    <details><summary><span class="tag recall">Recall</span> Exponential backoff already spaces out retries. What problem does jitter fix that backoff doesn't?</summary><div><p>Synchronization. Backoff slows each client down, but clients that failed at the same moment still wait the same amounts and retry at the same moments, so the load arrives in spikes. Jitter randomizes each wait so the retries spread out. A swarm makes this worse, because it launches many children at once.</p></div></details>
+    <details><summary><span class="tag apply">Apply</span> A 12-step run where each step succeeds with p = 0.97. What's the chance that no step fails?</summary><div><p>0.97<sup>12</sup> ≈ 0.69. Roughly 3 runs in 10 hit at least one failed step, which is why recovery has to be built into the loop, not bolted on.</p></div></details>
+    <details><summary><span class="tag apply">Apply</span> Two concurrent children both check “at least 5,000 tokens left?”, both see 8,000, and the run ends up 2,000 over budget. What went wrong, and what's the fix?</summary><div><p>A check-then-act race across an <code>await</code> (ch10): another task ran between the check and the spend. The fix is a reservation that checks and deducts in one step with no <code>await</code> in between, followed by a refund of the unused part once the real usage is known.</p></div></details>
+    <details><summary><span class="tag apply">Apply</span> The run deadline is 14:00:00. It's now 13:58:30 and a child asks for 120 seconds. What deadline does the child get, and what should it do with it?</summary><div><p>min(13:58:30 + 120 s, 14:00:00) = 14:00:00, so 90 seconds. It should plan for 90, not 120, and leave a margin before the hard deadline to return a partial result.</p></div></details>
+    <details><summary><span class="tag design">Design</span> A tool creates tickets in an external tracker. A call times out. How do you make retrying it safe?</summary><div><p>You can't tell from a timeout whether the ticket was created. Options: send an idempotency key derived from run id, agent id, step and call index, so the tracker or a check-before-create step drops duplicates. Or look the ticket up by that key before retrying. Or don't retry: return an <code>is_error</code> result saying “outcome unknown” and let a human or the parent decide. A random key generated per attempt doesn't work.</p></div></details>
+    <details><summary><span class="tag design">Design</span> Where should the circuit breaker for the model provider live in a swarm, and how does it relate to the retry loop?</summary><div><p>One breaker per dependency, shared by every agent, so the first failures protect the whole swarm instead of each agent learning separately. It sits outside the retry loop, so an open breaker also stops the retries. Because it's shared mutable state, its updates need the same care as the budget meter.</p></div></details>
+    <details><summary><span class="tag interview">Interview</span> “Our multi-agent system sometimes runs for hours and costs hundreds of dollars. How would you make that impossible?”</summary><div><p>Don't start with prompts. Start with hard limits enforced in code: a run deadline that propagates down the tree, a shared budget pool with reservations, depth, agent-count and fan-out limits checked before any agent is created, and per-agent step limits and timeouts. Then give the termination argument: a bounded tree where every node is bounded must end. Add a circuit breaker so outages fail fast, retries at one layer only, and loop detection for wasted steps. Finish with tracing (ch13), so the next expensive run shows you exactly where the money went.</p></div></details>
+  </div>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><strong>Marc Brooker, “Exponential Backoff And Jitter”</strong> (AWS Architecture Blog, 2015).<span class="why">The simulation behind full jitter. Short, with charts. Read it before you pick retry numbers.</span></li>
+    <li><strong>Michael T. Nygard, <em>Release It!</em></strong> (Pragmatic Bookshelf, 2007; 2nd edition 2018).<span class="why">The stability-patterns chapters cover circuit breakers, timeouts, bulkheads and fail-fast. Written about web services, and it transfers directly to agent harnesses.</span></li>
+    <li><strong>Martin Fowler, “CircuitBreaker”</strong> (martinfowler.com, 2014).<span class="why">A two-page explanation of the state machine in Figure 11.6, with code.</span></li>
+    <li><strong>Beyer, Jones, Petoff and Murphy (eds.), <em>Site Reliability Engineering</em></strong> (O'Reilly, 2016), chapters “Handling Overload” and “Addressing Cascading Failures”.<span class="why">The source of the retry-budget idea, and the clearest account of how retries turn a blip into an outage.</span></li>
+    <li><strong>Brandur Leach, “Designing robust and predictable APIs with idempotency”</strong> (Stripe blog, 2017).<span class="why">How idempotency keys work in a real payments API, and why the key has to belong to the operation, not the attempt.</span></li>
+    <li><strong>Anthropic, “Building effective agents”</strong> (2024).<span class="why">Its advice on stopping conditions, guardrails and testing in sandboxes is the agent-specific version of this chapter.</span></li>
+    <li><strong>Python documentation, “Coroutines and Tasks”</strong> (asyncio, Python 3.11 and later).<span class="why">The exact semantics of <code>TaskGroup</code>, <code>asyncio.timeout</code> and <code>CancelledError</code>, which your boundary code depends on.</span></li>
+  </ul>
+
+  <section class="recall-card" aria-labelledby="recall-11">
+    <h2 id="recall-11" data-short="Recall card">Recall card</h2>
+    <p class="muted small">Five lines to rehearse tomorrow, without looking.</p>
+    <ol>
+      <li>Reliability compounds as p<sup>n</sup>: at 0.95 per step, a 20-step run succeeds only about 36% of the time.</li>
+      <li>Sort every failure by “would the same request work again?”. Retry only transient ones, at one layer, with backoff and full jitter.</li>
+      <li>Deadlines nest: child deadline = min(own limit, parent's deadline). Pass deadlines, not durations. Only a clock catches a hang.</li>
+      <li>Budgets: check the worst case before, charge the actual after, reserve before a spawn, refund on return. Check and deduct with no <code>await</code> between.</li>
+      <li>Hard limits checked at create time, plus a step limit and deadline on every agent, make termination provable. A prompt instruction is the weakest brake.</li>
+    </ol>
+  </section>
+
+  <div class="done">
+    <input type="checkbox" id="done-toggle" data-chapter="11">
+    <label for="done-toggle">I can explain this chapter without notes<small>Saved in this browser only. It updates the count on the guide's home page.</small></label>
+  </div>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="10-concurrency.html"><small>Previous · Chapter 10</small>Concurrency for agents</a>
+    <a class="next" href="12-security.html"><small>Next · Chapter 12</small>Security and safety</a>
+  </nav>
+</main>
+<aside class="toc-rail" aria-label="On this page"><p class="toc-title">In this chapter</p><nav data-toc></nav></aside>
+</div>
+</body>
+</html>

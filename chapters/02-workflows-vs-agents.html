@@ -1,0 +1,730 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Workflows vs Agents · Loop to Swarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/guide.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="../index.html">Loop <span>→</span> Swarm</a>
+    <div class="crumbs"><a href="../index.html">Guide</a> · Part 1 · Foundations · Chapter 02</div>
+    <button class="theme-btn" id="theme-toggle" type="button">Dark theme</button>
+  </div>
+</header>
+
+<div class="page has-toc">
+<main class="chapter">
+
+  <header class="ch-head">
+    <p class="eyebrow"><b>Part 1 · Foundations</b> · Chapter 02 · Level L1</p>
+    <h1>Workflows vs agents</h1>
+    <p class="lede">Most "agentic" systems that work in production aren't agents. They're workflows: LLM calls wired together by code that decides what happens next. This chapter gives you one question that separates the two, five workflow patterns to reach for first, and a spectrum for placing any system, including your own.</p>
+    <ul class="ch-meta">
+      <li><b>40 min</b> reading</li>
+      <li>Builds on: <b>Chapter 01</b></li>
+      <li>Your project: <b>Stage 4, Stage 5</b></li>
+    </ul>
+    <ol class="where" aria-label="Where this chapter sits in the guide">
+      <li class="here"><span>Part 1</span>Foundations</li>
+      <li><span>Part 2</span>Thinking &amp; memory</li>
+      <li><span>Part 3</span>The harness</li>
+      <li><span>Part 4</span>Multi-agent</li>
+      <li><span>Part 5</span>Together</li>
+    </ol>
+  </header>
+
+  <details class="toc-mobile"><summary>In this chapter</summary><div data-toc></div></details>
+
+  <div class="box predict">
+    <span class="box-label">Predict first · 10 min</span>
+    <p>Write answers in <code>docs/LEARNING_NOTES.md</code> under “Guide ch02”. Tag each one <em>sure</em> or <em>guess</em>. Don't read on until you're done.</p>
+    <ol>
+      <li>Write one sentence that separates a workflow from an agent. It must start with “The difference is who decides…”.</li>
+      <li>A support bot answers FAQ questions and processes refunds. Should it be a workflow or an agent? Give one reason.</li>
+      <li>Name one cost an agent has that a workflow doing the same job doesn't.</li>
+    </ol>
+  </div>
+
+  <h2 id="big-idea">The big idea: who owns the control flow</h2>
+  <p>Every LLM system is a program that calls a model one or more times. The question that sorts these programs is not “how many calls?” or “does it use tools?” It's this: <strong>when one step finishes, who decides what happens next?</strong></p>
+  <ul>
+    <li>If <strong>your code</strong> decides, with the order of steps written down before the run starts, it's a <strong>workflow</strong>. The model fills in each step, but it can't add a step, skip one, or go back.</li>
+    <li>If <strong>the model</strong> decides, choosing its next action after seeing the result of the last one, again and again until it judges the task done, it's an <strong>agent</strong>.</li>
+  </ul>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 280" role="img" aria-label="Two panels. Workflow: three LLM calls (outline, draft, translate) run in a fixed order written in code. Agent: one model in a loop chooses among search, read_file and run_tests, sees each result, and decides when to return an answer.">
+        <defs>
+          <marker id="f0201-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0201-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-b t-lg" x="180" y="24" text-anchor="middle">Workflow</text>
+        <rect class="n-group" x="10" y="34" width="340" height="236" rx="8"/>
+        <text class="t-sm t-muted" x="73" y="78" text-anchor="middle">task</text>
+        <line x1="73" y1="82" x2="73" y2="98" marker-end="url(#f0201-ah)"/>
+        <rect class="n-plain" x="30" y="100" width="86" height="50" rx="6"/>
+        <text class="t-b" x="73" y="122" text-anchor="middle">outline</text>
+        <text class="t-xs t-muted" x="73" y="138" text-anchor="middle">LLM call</text>
+        <line x1="116" y1="125" x2="140" y2="125" marker-end="url(#f0201-ah)"/>
+        <rect class="n-plain" x="142" y="100" width="86" height="50" rx="6"/>
+        <text class="t-b" x="185" y="122" text-anchor="middle">draft</text>
+        <text class="t-xs t-muted" x="185" y="138" text-anchor="middle">LLM call</text>
+        <line x1="228" y1="125" x2="252" y2="125" marker-end="url(#f0201-ah)"/>
+        <rect class="n-plain" x="254" y="100" width="86" height="50" rx="6"/>
+        <text class="t-b" x="297" y="122" text-anchor="middle">translate</text>
+        <text class="t-xs t-muted" x="297" y="138" text-anchor="middle">LLM call</text>
+        <line x1="297" y1="150" x2="297" y2="184" marker-end="url(#f0201-ah)"/>
+        <text class="t-sm t-muted" x="297" y="200" text-anchor="middle">result</text>
+        <rect class="n-sunken" x="30" y="174" width="190" height="62" rx="4"/>
+        <text class="t-mono" x="42" y="194">a = llm(p1, task)</text>
+        <text class="t-mono" x="42" y="210">b = llm(p2, a)</text>
+        <text class="t-mono" x="42" y="226">return llm(p3, b)</text>
+        <text class="t-sm t-muted" x="180" y="258" text-anchor="middle">steps and their order are fixed in code</text>
+
+        <text class="t-b t-lg" x="540" y="24" text-anchor="middle">Agent</text>
+        <rect class="n-group" x="370" y="34" width="340" height="236" rx="8"/>
+        <rect class="n-accent" x="490" y="44" width="100" height="28" rx="5"/>
+        <text x="540" y="63" text-anchor="middle">answer</text>
+        <line class="e-accent" x1="540" y1="100" x2="540" y2="76" marker-end="url(#f0201-aha)"/>
+        <text class="t-sm t-accent" x="532" y="92" text-anchor="end">decides it's done</text>
+        <text class="t-sm t-muted" x="400" y="129">task</text>
+        <line x1="426" y1="125" x2="478" y2="125" marker-end="url(#f0201-ah)"/>
+        <rect class="n-plain n-thick" x="480" y="100" width="120" height="50" rx="6"/>
+        <text class="t-b" x="540" y="121" text-anchor="middle">model</text>
+        <text class="t-sm t-muted" x="540" y="138" text-anchor="middle">called in a loop</text>
+        <path class="e-accent" d="M600,112 C652,112 652,138 604,138" marker-end="url(#f0201-aha)"/>
+        <text class="t-xs t-accent" x="656" y="129">loop</text>
+        <line x1="505" y1="152" x2="442" y2="206" marker-start="url(#f0201-ah)" marker-end="url(#f0201-ah)"/>
+        <line x1="540" y1="152" x2="540" y2="206" marker-start="url(#f0201-ah)" marker-end="url(#f0201-ah)"/>
+        <line x1="575" y1="152" x2="638" y2="206" marker-start="url(#f0201-ah)" marker-end="url(#f0201-ah)"/>
+        <rect x="387" y="210" width="96" height="30" rx="5"/>
+        <text class="t-mono" x="435" y="229" text-anchor="middle">search</text>
+        <rect x="492" y="210" width="96" height="30" rx="5"/>
+        <text class="t-mono" x="540" y="229" text-anchor="middle">read_file</text>
+        <rect x="597" y="210" width="96" height="30" rx="5"/>
+        <text class="t-mono" x="645" y="229" text-anchor="middle">run_tests</text>
+        <text class="t-sm t-muted" x="540" y="258" text-anchor="middle">steps are chosen by the model at run time</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 2.1</b>The same number of LLM calls can be either kind of system. On the left, you can read the whole control flow in the three lines of code. On the right, the control flow only exists in the trace: which tool, in what order, how many times, and when to stop are decided while the program runs.</figcaption>
+  </figure>
+
+  <div class="box key">
+    <span class="box-label">Key idea</span>
+    <p><strong>Workflows</strong> are “systems where LLMs and tools are orchestrated through predefined code paths.” <strong>Agents</strong> are systems where “LLMs dynamically direct their own processes and tool usage, maintaining control over how they accomplish tasks.” (Schluntz and Zhang, 2024.) The test is simple: <em>could you draw the control-flow graph before the run starts?</em> If yes, it's a workflow, however clever each step is.</p>
+  </div>
+
+  <p>Neither is “better”. A workflow trades flexibility for predictability: you know its cost, latency and failure points in advance, and you can test each step alone. An agent trades predictability for flexibility: it can handle tasks whose steps you couldn't list ahead of time, but every run can take a different path, at a different cost. Choosing between them is an engineering decision, and you should be able to defend it.</p>
+
+  <h2 id="augmented" data-short="The augmented LLM">The building block: the augmented LLM</h2>
+  <p>Both workflows and agents are built from the same unit. Schluntz and Zhang call it the <strong>augmented LLM</strong>: one model call that can use three extensions. Chapter 01's bare model becomes useful once it has these:</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 220" role="img" aria-label="The augmented LLM. A central LLM box takes input and gives output. On the left it sends queries to retrieval and gets passages back. On the right it sends tool calls and gets results back. Below, it writes to and reads from memory.">
+        <defs>
+          <marker id="f0202-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0202-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect x="250" y="16" width="80" height="28" rx="5"/>
+        <text x="290" y="35" text-anchor="middle">input</text>
+        <rect x="390" y="16" width="80" height="28" rx="5"/>
+        <text x="430" y="35" text-anchor="middle">output</text>
+        <line x1="300" y1="44" x2="320" y2="78" marker-end="url(#f0202-ah)"/>
+        <line x1="400" y1="80" x2="420" y2="46" marker-end="url(#f0202-ah)"/>
+
+        <rect class="n-accent n-thick" x="290" y="80" width="140" height="56" rx="8"/>
+        <text class="t-b t-lg" x="360" y="106" text-anchor="middle">LLM</text>
+        <text class="t-sm t-muted" x="360" y="124" text-anchor="middle">one model call</text>
+
+        <rect x="40" y="88" width="160" height="40" rx="6"/>
+        <text class="t-b" x="120" y="104" text-anchor="middle">retrieval</text>
+        <text class="t-xs t-muted" x="120" y="120" text-anchor="middle">search an index or the web</text>
+        <line x1="288" y1="100" x2="202" y2="100" marker-end="url(#f0202-ah)"/>
+        <text class="t-sm t-muted" x="245" y="94" text-anchor="middle">query</text>
+        <line class="e-muted" x1="202" y1="116" x2="288" y2="116" marker-end="url(#f0202-ahm)"/>
+        <text class="t-sm t-muted" x="245" y="132" text-anchor="middle">passages</text>
+
+        <rect x="520" y="88" width="160" height="40" rx="6"/>
+        <text class="t-b" x="600" y="104" text-anchor="middle">tools</text>
+        <text class="t-xs t-muted" x="600" y="120" text-anchor="middle">act on the world</text>
+        <line x1="432" y1="100" x2="518" y2="100" marker-end="url(#f0202-ah)"/>
+        <text class="t-sm t-muted" x="475" y="94" text-anchor="middle">call</text>
+        <line class="e-muted" x1="518" y1="116" x2="432" y2="116" marker-end="url(#f0202-ahm)"/>
+        <text class="t-sm t-muted" x="475" y="132" text-anchor="middle">result</text>
+
+        <rect x="290" y="172" width="140" height="36" rx="6"/>
+        <text class="t-b" x="360" y="188" text-anchor="middle">memory</text>
+        <text class="t-xs t-muted" x="360" y="202" text-anchor="middle">kept across calls</text>
+        <line x1="340" y1="138" x2="340" y2="170" marker-end="url(#f0202-ah)"/>
+        <text class="t-sm t-muted" x="332" y="158" text-anchor="end">write</text>
+        <line class="e-muted" x1="380" y1="170" x2="380" y2="138" marker-end="url(#f0202-ahm)"/>
+        <text class="t-sm t-muted" x="388" y="158">read</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 2.2</b>The augmented LLM. Each arrow is a message your code carries, because the model can't reach anything by itself (Chapter 01). Retrieval and memory both put text into the context. Tools are different: they <em>change</em> something, or fetch fresh facts, and the result comes back as a new observation.</figcaption>
+  </figure>
+
+  <dl class="defs">
+    <dt>retrieval</dt><dd>The model, or your code, asks for relevant text and gets it placed in the context. Retrieval-augmented generation (RAG) is the name for this pattern.</dd>
+    <dt>tools</dt><dd>The model writes a structured request (“call <code>search</code> with these arguments”) and your code runs it. Chapter 04 covers the protocol.</dd>
+    <dt>memory</dt><dd>Anything that survives past one call: a saved summary, a notes file, a vector store. Chapter 07 covers it.</dd>
+  </dl>
+  <p>One augmented LLM call, used once, is already a complete system for many tasks. Everything after this point is about how you <em>combine</em> calls: with fixed code (workflows) or by letting the model pick the next call (agents).</p>
+
+  <h2 id="patterns">Five workflow patterns</h2>
+  <p>These five come from Schluntz and Zhang (2024). They're worth knowing by name because almost every production LLM system, including many sold as “agents”, is one of them or a mix. For each one, notice what the code fixes and what the model is allowed to decide.</p>
+
+  <h3>1 · Prompt chaining</h3>
+  <p>Break the task into a fixed sequence of steps. Each LLM call takes the previous call's output as input. Between steps you can put a <strong>gate</strong>: a programmatic check that the work so far is on track.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 156" role="img" aria-label="Prompt chaining: a task goes to LLM 1 (outline), then through a code gate. If the gate passes, LLM 2 drafts and LLM 3 polishes, giving the output. If the gate fails, the chain retries or stops.">
+        <defs>
+          <marker id="f0203-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0203-ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-red" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-sm t-muted" x="16" y="72">task</text>
+        <line x1="46" y1="68" x2="80" y2="68" marker-end="url(#f0203-ah)"/>
+        <rect class="n-plain" x="82" y="44" width="110" height="48" rx="6"/>
+        <text class="t-b" x="137" y="64" text-anchor="middle">LLM 1</text>
+        <text class="t-sm t-muted" x="137" y="81" text-anchor="middle">outline</text>
+        <line x1="192" y1="68" x2="220" y2="68" marker-end="url(#f0203-ah)"/>
+        <polygon class="n-amber" points="262,40 302,68 262,96 222,68"/>
+        <text class="t-sm t-b" x="262" y="72" text-anchor="middle">gate</text>
+        <text class="t-xs t-muted" x="262" y="32" text-anchor="middle">code check</text>
+        <line x1="302" y1="68" x2="332" y2="68" marker-end="url(#f0203-ah)"/>
+        <text class="t-xs t-muted" x="317" y="60" text-anchor="middle">pass</text>
+        <rect class="n-plain" x="334" y="44" width="110" height="48" rx="6"/>
+        <text class="t-b" x="389" y="64" text-anchor="middle">LLM 2</text>
+        <text class="t-sm t-muted" x="389" y="81" text-anchor="middle">draft</text>
+        <line x1="444" y1="68" x2="474" y2="68" marker-end="url(#f0203-ah)"/>
+        <rect class="n-plain" x="476" y="44" width="110" height="48" rx="6"/>
+        <text class="t-b" x="531" y="64" text-anchor="middle">LLM 3</text>
+        <text class="t-sm t-muted" x="531" y="81" text-anchor="middle">polish</text>
+        <line x1="586" y1="68" x2="616" y2="68" marker-end="url(#f0203-ah)"/>
+        <text class="t-sm t-muted" x="622" y="72">output</text>
+        <line class="e-red" x1="262" y1="96" x2="262" y2="118" marker-end="url(#f0203-ahr)"/>
+        <text class="t-xs t-red" x="270" y="112">fail</text>
+        <rect class="n-red" x="202" y="120" width="120" height="26" rx="5"/>
+        <text class="t-sm" x="262" y="137" text-anchor="middle">retry or stop</text>
+        <text class="t-sm t-muted" x="350" y="137">each call does one easier job; code checks between</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 2.3</b>Prompt chaining. The gate is ordinary code, such as “does the outline have 3–7 sections?” or “is this valid JSON matching the schema?”. Chapter 01's validation chain fits here. A failure is caught at the step that caused it instead of three steps later.</figcaption>
+  </figure>
+  <p><strong>Use it when</strong> the task splits cleanly into fixed subtasks. You give up some latency for accuracy, because each call has a smaller, easier job. <strong>Examples:</strong> write marketing copy, then translate it; write an outline, check it, then write the document. <strong>It breaks when</strong> the right next step depends on what the previous step found. A fixed chain can't change course.</p>
+
+  <h3>2 · Routing</h3>
+  <p>One LLM call classifies the input. Code then sends it down one of several specialized paths. Each path has its own prompt, tools or even a different model.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 200" role="img" aria-label="Routing: a ticket goes to a router LLM that classifies it. Code sends it to exactly one handler: refund flow, tech-support prompt with tools, or general FAQ on a small model. The handler's output becomes the reply.">
+        <defs>
+          <marker id="f0204-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-sm t-muted" x="16" y="104">ticket</text>
+        <line x1="56" y1="100" x2="98" y2="100" marker-end="url(#f0204-ah)"/>
+        <rect class="n-accent" x="100" y="72" width="130" height="56" rx="6"/>
+        <text class="t-b" x="165" y="96" text-anchor="middle">router</text>
+        <text class="t-sm t-muted" x="165" y="114" text-anchor="middle">LLM classifies</text>
+        <path d="M230,100 H270 V38 H328" marker-end="url(#f0204-ah)"/>
+        <path d="M230,100 H328" marker-end="url(#f0204-ah)"/>
+        <path d="M230,100 H270 V162 H328" marker-end="url(#f0204-ah)"/>
+        <text class="t-sm t-muted" x="299" y="32" text-anchor="middle">refund</text>
+        <text class="t-sm t-muted" x="299" y="94" text-anchor="middle">technical</text>
+        <text class="t-sm t-muted" x="299" y="156" text-anchor="middle">other</text>
+        <rect x="330" y="20" width="200" height="36" rx="5"/>
+        <text x="430" y="43" text-anchor="middle">refund flow</text>
+        <rect x="330" y="82" width="200" height="36" rx="5"/>
+        <text x="430" y="105" text-anchor="middle">tech-support prompt + tools</text>
+        <rect x="330" y="144" width="200" height="36" rx="5"/>
+        <text x="430" y="167" text-anchor="middle">general FAQ · small model</text>
+        <path class="e-muted" d="M530,38 H575 V100"/>
+        <path class="e-muted" d="M530,162 H575 V100"/>
+        <path d="M530,100 H618" marker-end="url(#f0204-ah)"/>
+        <rect class="n-plain" x="620" y="82" width="80" height="36" rx="5"/>
+        <text x="660" y="105" text-anchor="middle">reply</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 2.4</b>Routing. The model makes one decision: which label. The paths, and what happens on each, are fixed in code. Only one path runs per input. The router's output should be a closed set of labels you validate, with a default for “none of these”.</figcaption>
+  </figure>
+  <p><strong>Use it when</strong> inputs fall into distinct categories that are better handled separately, and the classification is reliable. Optimizing one prompt for every kind of input tends to make it worse at some of them. <strong>Examples:</strong> customer-service tickets sorted into general questions, refunds and technical support; easy questions sent to a smaller, cheaper model and hard ones to a larger one. <strong>It breaks when</strong> inputs belong to several categories at once, or the categories blur.</p>
+
+  <h3>3 · Parallelization</h3>
+  <p>Run several LLM calls at the same time and combine their outputs in code. There are two versions, and they solve different problems.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 230" role="img" aria-label="Two kinds of parallelization. Sectioning: one input goes to three different checks (facts, tone, policy) that run at once and are combined. Voting: the same task runs three times, giving yes, yes and no, and a vote picks yes.">
+        <defs>
+          <marker id="f0205-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-b" x="180" y="22" text-anchor="middle">Sectioning: split the work</text>
+        <rect class="n-group" x="10" y="30" width="340" height="190" rx="8"/>
+        <rect class="n-plain" x="24" y="108" width="60" height="32" rx="5"/>
+        <text x="54" y="129" text-anchor="middle">input</text>
+        <path d="M84,124 H100 V66 H118" marker-end="url(#f0205-ah)"/>
+        <path d="M84,124 H118" marker-end="url(#f0205-ah)"/>
+        <path d="M84,124 H100 V182 H118" marker-end="url(#f0205-ah)"/>
+        <rect x="120" y="50" width="110" height="32" rx="5"/>
+        <text x="175" y="71" text-anchor="middle">check facts</text>
+        <rect x="120" y="108" width="110" height="32" rx="5"/>
+        <text x="175" y="129" text-anchor="middle">check tone</text>
+        <rect x="120" y="166" width="110" height="32" rx="5"/>
+        <text x="175" y="187" text-anchor="middle">check policy</text>
+        <path class="e-muted" d="M230,66 H247 V124"/>
+        <path class="e-muted" d="M230,182 H247 V124"/>
+        <path d="M230,124 H262" marker-end="url(#f0205-ah)"/>
+        <rect class="n-accent" x="264" y="108" width="76" height="32" rx="5"/>
+        <text x="302" y="129" text-anchor="middle">combine</text>
+        <text class="t-xs t-muted" x="180" y="214" text-anchor="middle">different subtasks, run at the same time</text>
+
+        <text class="t-b" x="540" y="22" text-anchor="middle">Voting: repeat the same work</text>
+        <rect class="n-group" x="370" y="30" width="340" height="190" rx="8"/>
+        <rect class="n-plain" x="384" y="108" width="60" height="32" rx="5"/>
+        <text x="414" y="129" text-anchor="middle">input</text>
+        <path d="M444,124 H460 V66 H478" marker-end="url(#f0205-ah)"/>
+        <path d="M444,124 H478" marker-end="url(#f0205-ah)"/>
+        <path d="M444,124 H460 V182 H478" marker-end="url(#f0205-ah)"/>
+        <rect x="480" y="50" width="110" height="32" rx="5"/>
+        <text x="535" y="71" text-anchor="middle">run 1: yes</text>
+        <rect x="480" y="108" width="110" height="32" rx="5"/>
+        <text x="535" y="129" text-anchor="middle">run 2: yes</text>
+        <rect class="n-amber" x="480" y="166" width="110" height="32" rx="5"/>
+        <text x="535" y="187" text-anchor="middle">run 3: no</text>
+        <path class="e-muted" d="M590,66 H602 V124"/>
+        <path class="e-muted" d="M590,182 H602 V124"/>
+        <path d="M590,124 H612" marker-end="url(#f0205-ah)"/>
+        <rect class="n-accent" x="614" y="108" width="86" height="32" rx="5"/>
+        <text x="657" y="129" text-anchor="middle">vote → yes</text>
+        <text class="t-xs t-muted" x="540" y="214" text-anchor="middle">same task N times, take the majority</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 2.5</b>Parallelization. In sectioning, each call has a different, narrower job, so each prompt can focus on one thing. Voting buys confidence by repetition: the self-consistency idea (Wang et al., 2023). In both, the list of parallel calls and the combine step are written in code.</figcaption>
+  </figure>
+  <p><strong>Use it when</strong> subtasks are independent (sectioning, for speed and focus) or when one answer isn't trustworthy enough and several attempts help (voting). <strong>Examples:</strong> one call answers the user while another screens the request for policy problems; several prompts each review code for a different class of vulnerability; three judges vote on whether content is inappropriate, with a threshold you choose. <strong>It breaks when</strong> the subtasks depend on each other, or when every vote shares the same blind spot. Three runs of the same prompt are not three independent opinions.</p>
+
+  <h3>4 · Orchestrator-workers</h3>
+  <p>A central LLM looks at the task, <em>decides at run time</em> what the subtasks are, hands each to a worker LLM call, and then a final step combines the results.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 228" role="img" aria-label="Orchestrator-workers: an orchestrator LLM reads the task and decides the subtasks at run time, for example auth module, API routes and tests, and possibly more. Each goes to a worker. A synthesizer LLM merges the results into one answer.">
+        <defs>
+          <marker id="f0206-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0206-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-sm t-muted" x="16" y="104">task</text>
+        <line x1="44" y1="100" x2="78" y2="100" marker-end="url(#f0206-ah)"/>
+        <rect class="n-accent" x="80" y="70" width="150" height="60" rx="6"/>
+        <text class="t-b" x="155" y="96" text-anchor="middle">orchestrator</text>
+        <text class="t-sm t-muted" x="155" y="114" text-anchor="middle">LLM decides subtasks</text>
+        <path d="M230,100 H262 V38 H298" marker-end="url(#f0206-ah)"/>
+        <path d="M230,100 H262 V88 H298" marker-end="url(#f0206-ah)"/>
+        <path d="M262,100 V138 H298" marker-end="url(#f0206-ah)"/>
+        <path class="e-muted e-dash" d="M262,138 V188 H298" marker-end="url(#f0206-ahm)"/>
+        <rect x="300" y="20" width="140" height="36" rx="5"/>
+        <text x="370" y="43" text-anchor="middle">worker: auth module</text>
+        <rect x="300" y="70" width="140" height="36" rx="5"/>
+        <text x="370" y="93" text-anchor="middle">worker: API routes</text>
+        <rect x="300" y="120" width="140" height="36" rx="5"/>
+        <text x="370" y="143" text-anchor="middle">worker: tests</text>
+        <rect class="n-ghost" x="300" y="170" width="140" height="36" rx="5"/>
+        <text class="t-sm t-muted" x="370" y="192" text-anchor="middle">… chosen at run time</text>
+        <path class="e-muted" d="M440,38 H470 V100"/>
+        <path class="e-muted" d="M440,88 H470"/>
+        <path class="e-muted" d="M440,138 H470 V100"/>
+        <path class="e-muted e-dash" d="M440,188 H470 V138"/>
+        <path d="M470,100 H498" marker-end="url(#f0206-ah)"/>
+        <rect class="n-plain" x="500" y="70" width="110" height="60" rx="6"/>
+        <text class="t-b" x="555" y="96" text-anchor="middle">synthesizer</text>
+        <text class="t-sm t-muted" x="555" y="114" text-anchor="middle">LLM merges</text>
+        <line x1="610" y1="100" x2="638" y2="100" marker-end="url(#f0206-ah)"/>
+        <rect class="n-accent" x="640" y="82" width="66" height="36" rx="5"/>
+        <text x="673" y="105" text-anchor="middle">answer</text>
+        <text class="t-xs t-muted" x="360" y="222" text-anchor="middle">unlike sectioning, the list of subtasks is not written in the code</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 2.6</b>Orchestrator-workers. Compare it with sectioning in Figure 2.5: the shape is the same, but here the model writes the list of subtasks. That's the first pattern where the model shapes the work, not just the content of a step. The pipeline itself is still fixed: plan once, run the workers, merge, done.</figcaption>
+  </figure>
+  <p><strong>Use it when</strong> you can't predict the subtasks in advance. <strong>Examples:</strong> a coding change whose set of files depends on the request; a research question that needs a different set of searches each time. <strong>It breaks when</strong> the plan is wrong and nothing notices, because nothing loops back to re-plan; when workers duplicate each other; or when the synthesizer can't reconcile results. Look closely at this pattern. It's your Stage 4.</p>
+
+  <h3>5 · Evaluator-optimizer</h3>
+  <p>One LLM call generates a response. Another evaluates it against clear criteria and gives feedback. The generator revises using the feedback, and this repeats until the evaluator accepts or a round limit is hit.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 170" role="img" aria-label="Evaluator-optimizer: a generator LLM writes a draft, and an evaluator grades it. If the draft passes, it becomes the accepted output. If it fails, specific feedback goes back to the generator to try again, up to N rounds.">
+        <defs>
+          <marker id="f0207-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0207-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0207-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-amber" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-sm t-muted" x="20" y="76">task</text>
+        <line x1="50" y1="72" x2="108" y2="72" marker-end="url(#f0207-ah)"/>
+        <rect class="n-plain" x="110" y="40" width="140" height="64" rx="6"/>
+        <text class="t-b" x="180" y="68" text-anchor="middle">generator</text>
+        <text class="t-sm t-muted" x="180" y="86" text-anchor="middle">LLM writes or revises</text>
+        <line x1="250" y1="72" x2="318" y2="72" marker-end="url(#f0207-ah)"/>
+        <text class="t-sm t-muted" x="284" y="64" text-anchor="middle">draft</text>
+        <rect class="n-plain" x="320" y="40" width="140" height="64" rx="6"/>
+        <text class="t-b" x="390" y="68" text-anchor="middle">evaluator</text>
+        <text class="t-sm t-muted" x="390" y="86" text-anchor="middle">LLM or code grades</text>
+        <line class="e-accent" x1="460" y1="72" x2="548" y2="72" marker-end="url(#f0207-aha)"/>
+        <text class="t-sm t-accent" x="504" y="64" text-anchor="middle">passes</text>
+        <rect class="n-accent" x="550" y="50" width="150" height="44" rx="6"/>
+        <text x="625" y="77" text-anchor="middle">accepted output</text>
+        <path class="e-amber" d="M390,104 V140 H180 V108" marker-end="url(#f0207-ahm)"/>
+        <text class="t-sm t-amber" x="285" y="160" text-anchor="middle">fails: specific feedback, try again (max N rounds)</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 2.7</b>Evaluator-optimizer. This is a loop, but a loop with a fixed shape: generate, grade, repeat. The model decides <em>whether</em> to go round again, never <em>what kind</em> of step comes next. The round limit is code, and it is not optional. Self-Refine (Madaan et al., 2023) is a single-model version of this idea.</figcaption>
+  </figure>
+  <p><strong>Use it when</strong> you have clear evaluation criteria and revision measurably helps, as when a human editor's feedback would improve the draft. <strong>Examples:</strong> literary translation where the evaluator catches lost nuance; a search task that needs several rounds of searching until the evaluator judges the coverage complete. <strong>It breaks when</strong> the evaluator can't tell good from bad (vague criteria, or the same model grading its own blind spots), and when the round limit is missing, so the loop runs until the budget dies.</p>
+
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Pattern</th><th>Code fixes</th><th>The model decides</th><th>Extra cost</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Chaining</strong></td><td>the steps, their order, the gates</td><td>the content of each step</td><td>latency (calls run one after another)</td></tr>
+        <tr><td><strong>Routing</strong></td><td>the set of paths</td><td>which single path</td><td>one classification call</td></tr>
+        <tr><td><strong>Parallel: sectioning</strong></td><td>the subtasks and the combine step</td><td>the content of each subtask</td><td>more calls, same wall-clock</td></tr>
+        <tr><td><strong>Parallel: voting</strong></td><td>N and the voting rule</td><td>each vote</td><td>N× the calls</td></tr>
+        <tr><td><strong>Orchestrator-workers</strong></td><td>the pipeline: plan → workers → merge</td><td>the number and content of subtasks</td><td>planning call, unpredictable fan-out</td></tr>
+        <tr><td><strong>Evaluator-optimizer</strong></td><td>the loop shape and the round limit</td><td>pass or fail, plus the feedback</td><td>up to 2× rounds calls</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Read down the middle column. The amount the model decides grows, but in every row the <em>kinds</em> of step, and what comes after each one, are still fixed by code. That's what's about to change.</p>
+
+  <div class="box stop">
+    <span class="box-label">Checkpoint · stop here</span>
+    <p>The next three sections answer part of your <strong>Round 2 Q1</strong>: what makes something an agent, and whether examples (a) and (b) are agents. <strong>Write your Round 2 Q1 answer in <code>docs/LEARNING_NOTES.md</code> first.</strong> Use only what you've read so far. Then read on and compare. Where the guide disagrees with you, write down which of you is right and why. Don't just copy the guide's version over yours.</p>
+  </div>
+
+  <h2 id="agents" data-short="Agents">Agents: the model owns the loop</h2>
+  <p>Schluntz and Zhang describe agents in one plain line: they “are typically just LLMs using tools based on environmental feedback in a loop.” Each part of that sentence carries weight:</p>
+  <dl class="defs">
+    <dt>using tools</dt><dd>The model picks an <em>action</em> from an open menu, with arguments it writes itself. It isn't just picking a label for your code to act on.</dd>
+    <dt>environmental feedback</dt><dd>The action's result comes back to the model as an <strong>observation</strong>: a search result, a test failure, a file's contents. This is the agent's “ground truth” for judging its own progress.</dd>
+    <dt>in a loop</dt><dd>The model sees the observation and chooses again. It keeps choosing until it decides the task is done, or until a limit your code set stops it.</dd>
+  </dl>
+  <p>Put side by side in code, the difference is visible in a handful of lines. This sketch leaves out everything Chapter 03 adds (limits, errors, state), so look only at the shape:</p>
+
+  <p class="code-label">routing workflow (example b)</p>
+<pre><code>label = llm.complete(prompt=CLASSIFY, input=ticket).text   <span class="c"># model decides once</span>
+<span class="k">return</span> HANDLERS[label](ticket)                            <span class="c"># code decides what follows; run ends</span></code></pre>
+
+  <p class="code-label">agent (shape only)</p>
+<pre><code>messages = [user(task)]
+<span class="k">while</span> <span class="k">True</span>:                                        <span class="c"># real code bounds this: Chapter 03</span>
+    reply = llm.complete(messages=messages, tools=TOOLS)
+    <span class="k">if</span> reply.stop_reason == <span class="s">"end_turn"</span>:
+        <span class="k">return</span> reply.text                              <span class="c"># <span class="hl">model decided it's done</span></span>
+    results = [run(call) <span class="k">for</span> call <span class="k">in</span> reply.tool_calls]  <span class="c"># <span class="hl">model picked the action</span></span>
+    messages += [reply, user(results)]               <span class="c"># <span class="hl">model sees the result next time</span></span></code></pre>
+
+  <p>The three highlighted comments are the three things the workflow version doesn't have. In the workflow, the model's output is used once and the program moves on. In the agent, the model's output determines what the program does <em>and</em> what the model sees next, so each decision feeds the next one.</p>
+
+  <h3>When an agent is the right tool</h3>
+  <ul>
+    <li><strong>The path can't be written down in advance.</strong> You can't predict how many steps it takes, or which, because that depends on what the earlier steps find. Fixing a bug in an unfamiliar codebase is the classic case.</li>
+    <li><strong>The environment gives honest feedback.</strong> Tests pass or fail, code compiles or doesn't, a search returns something or nothing. Without a signal like this the agent can't tell whether it's making progress, and it will report success anyway.</li>
+    <li><strong>You trust the model's decisions in this domain</strong>, and the cost of a wrong action is bounded: a sandbox, reversible actions, or a human approval on the risky ones.</li>
+  </ul>
+
+  <h3>What it costs</h3>
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th></th><th>Workflow</th><th>Agent</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Cost per request</strong></td><td>known in advance: count the calls</td><td>a distribution; the tail can be 10× the median</td></tr>
+        <tr><td><strong>Latency</strong></td><td>fixed, and parallel steps run at once</td><td>grows with the step count; steps mostly run one after another</td></tr>
+        <tr><td><strong>Testing</strong></td><td>each step alone, with fixed inputs</td><td>whole trajectories, many runs each (Chapter 13)</td></tr>
+        <tr><td><strong>Debugging</strong></td><td>read the code</td><td>read the trace; the control flow only exists there</td></tr>
+        <tr><td><strong>Errors</strong></td><td>caught at a known gate</td><td>compound: a wrong step 2 shapes every later step</td></tr>
+        <tr><td><strong>Security surface</strong></td><td>tools are called only where the code calls them</td><td>any tool, any time, with arguments shaped by everything in the context (Chapter 12)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Note what's <em>not</em> in the table: “agents are smarter.” The model is the same in both columns. An agent spends extra tokens and predictability to get <em>adaptivity</em>: the ability to change course based on what it finds.</p>
+
+  <h2 id="spectrum">The autonomy spectrum</h2>
+  <p>“Workflow or agent” is a useful binary, but real systems sit along a line. A better question than “is it an agent?” is “how much of the control flow does the model own?” Andrew Ng has argued for treating “agentic” as an adjective with degrees rather than a yes-or-no label, and Kapoor et al. (2024) describe agentic-ness as a spectrum for the same reason.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg xwide" viewBox="0 0 760 215" role="img" aria-label="The autonomy spectrum, from left to right: single call, chain, router, orchestrator, agent, swarm. The first four are workflows where code owns the loop. A dashed line marks the agent line between orchestrator and agent. Agent and swarm are on the side where the model owns the loop. Example (a), the summarizer, sits at single call. Example (b), classify and route, sits at router.">
+        <defs>
+          <marker id="f0208-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0208-ahv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-violet" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <path class="e-muted" d="M90,30 V22 H505 V30"/>
+        <text class="t-sm t-muted" x="297" y="16" text-anchor="middle">workflows: code owns the loop</text>
+        <path class="e-accent" d="M525,30 V22 H740 V30"/>
+        <text class="t-sm t-accent" x="632" y="16" text-anchor="middle">agents: the model owns the loop</text>
+
+        <line class="e-muted" x1="90" y1="60" x2="748" y2="60" marker-end="url(#f0208-ah)"/>
+        <circle cx="130" cy="60" r="8"/>
+        <circle cx="240" cy="60" r="8"/>
+        <circle cx="350" cy="60" r="8"/>
+        <circle cx="460" cy="60" r="8"/>
+        <circle class="n-accent" cx="570" cy="60" r="8"/>
+        <circle class="n-accent" cx="680" cy="60" r="8"/>
+
+        <text class="t-b" x="130" y="88" text-anchor="middle">Single call</text>
+        <text class="t-b" x="240" y="88" text-anchor="middle">Chain</text>
+        <text class="t-b" x="350" y="88" text-anchor="middle">Router</text>
+        <text class="t-b" x="460" y="88" text-anchor="middle">Orchestrator</text>
+        <text class="t-b t-accent" x="570" y="88" text-anchor="middle">Agent</text>
+        <text class="t-b t-accent" x="680" y="88" text-anchor="middle">Swarm</text>
+
+        <text class="t-sm t-muted" x="130" y="106" text-anchor="middle">one prompt,</text>
+        <text class="t-sm t-muted" x="130" y="120" text-anchor="middle">one answer</text>
+        <text class="t-sm t-muted" x="240" y="106" text-anchor="middle">fixed steps</text>
+        <text class="t-sm t-muted" x="240" y="120" text-anchor="middle">in code</text>
+        <text class="t-sm t-muted" x="350" y="106" text-anchor="middle">model picks</text>
+        <text class="t-sm t-muted" x="350" y="120" text-anchor="middle">one branch</text>
+        <text class="t-sm t-muted" x="460" y="106" text-anchor="middle">model plans</text>
+        <text class="t-sm t-muted" x="460" y="120" text-anchor="middle">subtasks once</text>
+        <text class="t-sm t-muted" x="570" y="106" text-anchor="middle">acts, observes,</text>
+        <text class="t-sm t-muted" x="570" y="120" text-anchor="middle">decides again</text>
+        <text class="t-sm t-muted" x="680" y="106" text-anchor="middle">agents spawn</text>
+        <text class="t-sm t-muted" x="680" y="120" text-anchor="middle">agents</text>
+
+        <text class="t-caps t-muted" x="12" y="146">model</text>
+        <text class="t-caps t-muted" x="12" y="158">decides:</text>
+        <text class="t-sm" x="130" y="153" text-anchor="middle">the words</text>
+        <text class="t-sm" x="240" y="153" text-anchor="middle">step contents</text>
+        <text class="t-sm" x="350" y="153" text-anchor="middle">the branch</text>
+        <text class="t-sm" x="460" y="153" text-anchor="middle">the subtasks</text>
+        <text class="t-sm t-accent" x="570" y="153" text-anchor="middle">steps + stopping</text>
+        <text class="t-sm t-accent" x="680" y="153" text-anchor="middle">who exists</text>
+
+        <line class="e-accent e-dash" x1="515" y1="30" x2="515" y2="168"/>
+        <text class="t-xs t-accent" x="515" y="182" text-anchor="middle">the agent line</text>
+
+        <line class="e-violet" x1="130" y1="184" x2="130" y2="168" marker-end="url(#f0208-ahv)"/>
+        <text class="t-sm t-violet" x="130" y="198" text-anchor="middle">(a) summarizer</text>
+        <line class="e-violet" x1="350" y1="184" x2="350" y2="168" marker-end="url(#f0208-ahv)"/>
+        <text class="t-sm t-violet" x="350" y="198" text-anchor="middle">(b) classify → route</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 2.8</b>The autonomy spectrum. Moving right, the model decides more and the code decides less. Cost, latency and unpredictability grow in the same direction. The agent line is where the model starts choosing the <em>next step</em> after seeing the result of the last one, in a loop. Violet marks your two Round 1 examples.</figcaption>
+  </figure>
+
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>Level</th><th>The model controls</th><th>Code still controls</th><th>Typical failure</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Single call</strong></td><td>the text of one answer</td><td>everything else</td><td>wrong or malformed answer</td></tr>
+        <tr><td><strong>Chain</strong></td><td>the content of each fixed step</td><td>which steps, in what order, the gates</td><td>early error carried forward (if there's no gate)</td></tr>
+        <tr><td><strong>Router</strong></td><td>which of N fixed paths</td><td>the paths, the default, what happens next</td><td>misclassification</td></tr>
+        <tr><td><strong>Orchestrator</strong></td><td>how many subtasks and what they are</td><td>the pipeline, the fan-out limit, the merge</td><td>bad plan with no chance to re-plan</td></tr>
+        <tr><td><strong>Agent</strong></td><td>the next action, its arguments, when to stop</td><td>which tools exist, permissions, budgets, step limits</td><td>wandering, looping, false “done”</td></tr>
+        <tr><td><strong>Swarm</strong></td><td>whether to create more agents, and their tasks</td><td>spawn limits (depth, fan-out, total), budget pools, termination</td><td>runaway growth, duplicated work, lost information</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Read the third column carefully. It never becomes empty. Even at the far right, your code decides what the model is <em>allowed</em> to do and when it's forced to stop. That's principle 2.2 in your spec, “LLM proposes, framework decides”, written as a table. Moving right doesn't remove the harness. It moves the harness's job from <em>choosing the steps</em> to <em>constraining the chooser</em>.</p>
+
+  <h2 id="examples" data-short="Your examples (a), (b)">Your two examples, placed on the spectrum</h2>
+  <p>Back to the two cases from your Round 1 feedback. Check your checkpoint answer against each step.</p>
+
+  <h3>(a) Send text to an LLM, return the summary</h3>
+  <p>This is a <strong>single call</strong>, the leftmost point on Figure 2.8. The model decides the words of the summary and nothing else. Nothing it writes changes what the program does next, because there is no next. It's a function that happens to contain an LLM call: <code>summarize(text) → str</code>. Not an agent under any definition.</p>
+
+  <h3>(b) Classify the request, route to one of three hardcoded handlers</h3>
+  <p>This one is more interesting, because the LLM's output <em>does</em> change what the program does. Your A1 said that if “whatever is obtained from the LLM” can't be “used to act upon”, it's a function. In (b) it <em>is</em> used to act upon: the label picks the handler. So a definition built on “uses the LLM's result to act” puts (b) on the agent side, and that's the problem with it. It lets in every router, and routers are workflows.</p>
+  <p>(b) is a <strong>routing workflow</strong> (Figure 2.4). Compared with the agent sketch above, it's missing all three highlighted lines:</p>
+  <ol>
+    <li><strong>No feedback.</strong> The model never sees what the handler did. If the refund handler fails, the model doesn't know.</li>
+    <li><strong>No second decision.</strong> The model chooses once, and then the run ends. There's no loop in which its next choice depends on an observation.</li>
+    <li><strong>No say over stopping.</strong> The code ends the run after one handler. The model can't decide “that didn't work, try the other path” or “done”.</li>
+  </ol>
+  <p>A fourth difference is smaller but real: the model chooses from three <em>labels</em> that code interprets, instead of choosing <em>actions with arguments</em>. That's what separates routing from tool use.</p>
+
+  <figure class="fig">
+    <div class="fig-frame">
+      <svg class="dg wide" viewBox="0 0 720 200" role="img" aria-label="Left: example (b) as written. A classify call picks a handler, the handler replies, and the run ends. The model never sees the handler's result. Right: the smallest change that makes it an agent. The handlers become tools. The model calls one, gets the result back, and decides again or finishes, with a maximum step count enforced by code.">
+        <defs>
+          <marker id="f0209-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0209-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-accent" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f0209-ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-amber" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-b" x="180" y="22" text-anchor="middle">(b) as written: routing</text>
+        <rect class="n-group" x="10" y="30" width="340" height="160" rx="8"/>
+        <text class="t-sm t-muted" x="22" y="84">ticket</text>
+        <line x1="56" y1="80" x2="78" y2="80" marker-end="url(#f0209-ah)"/>
+        <rect class="n-plain" x="80" y="60" width="90" height="40" rx="6"/>
+        <text x="125" y="85" text-anchor="middle">classify</text>
+        <line x1="170" y1="80" x2="198" y2="80" marker-end="url(#f0209-ah)"/>
+        <rect x="200" y="60" width="90" height="40" rx="6"/>
+        <text x="245" y="85" text-anchor="middle">handler</text>
+        <line x1="290" y1="80" x2="312" y2="80" marker-end="url(#f0209-ah)"/>
+        <text class="t-sm t-muted" x="315" y="84">reply</text>
+        <text class="t-sm t-muted" x="180" y="132" text-anchor="middle">one model decision, then the run ends</text>
+        <text class="t-sm t-muted" x="180" y="150" text-anchor="middle">the model never sees the handler's result</text>
+        <text class="t-sm t-muted" x="180" y="168" text-anchor="middle">code decides when it's over</text>
+
+        <text class="t-b t-accent" x="540" y="22" text-anchor="middle">(b′) smallest change: an agent</text>
+        <rect class="n-group" x="370" y="30" width="340" height="160" rx="8"/>
+        <text class="t-sm t-muted" x="382" y="74">ticket</text>
+        <line x1="416" y1="70" x2="448" y2="70" marker-end="url(#f0209-ah)"/>
+        <rect class="n-accent" x="450" y="48" width="110" height="44" rx="6"/>
+        <text class="t-b" x="505" y="68" text-anchor="middle">model</text>
+        <text class="t-xs t-muted" x="505" y="84" text-anchor="middle">picks next action</text>
+        <line x1="490" y1="94" x2="490" y2="128" marker-end="url(#f0209-ah)"/>
+        <text class="t-xs t-muted" x="484" y="115" text-anchor="end">call</text>
+        <line class="e-accent" x1="520" y1="128" x2="520" y2="96" marker-end="url(#f0209-aha)"/>
+        <text class="t-xs t-accent" x="526" y="115">result</text>
+        <rect x="420" y="130" width="170" height="34" rx="5"/>
+        <text x="505" y="151" text-anchor="middle">handlers, now tools</text>
+        <line x1="560" y1="70" x2="616" y2="70" marker-end="url(#f0209-ah)"/>
+        <text class="t-xs t-muted" x="588" y="62" text-anchor="middle">done</text>
+        <text class="t-sm t-muted" x="620" y="74">reply</text>
+        <rect class="n-amber" x="604" y="130" width="96" height="34" rx="5"/>
+        <text class="t-sm" x="652" y="145" text-anchor="middle">max steps</text>
+        <text class="t-xs t-muted" x="652" y="158" text-anchor="middle">enforced by code</text>
+        <path class="e-amber e-dash" d="M652,130 V86 H564" marker-end="url(#f0209-ahm)"/>
+        <text class="t-xs t-muted" x="540" y="182" text-anchor="middle">the result goes back; the model decides again or stops</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 2.9</b>The smallest change that turns (b) into an agent. Turn the handlers into tools, send each result back to the model, and let it choose again or finish. Then add the one thing the model can't be trusted with: a step limit enforced by code. The handlers didn't get smarter. Only the ownership of “what next?” moved.</figcaption>
+  </figure>
+
+  <div class="box key">
+    <span class="box-label">A sharper definition</span>
+    <p>An agent is a program in which <strong>a model repeatedly chooses the next action, observes its result, and decides when the task is done</strong>, inside limits that code enforces.</p>
+    <p class="small muted">Compare it with your A1 word by word. “Deterministic software” describes the harness around the agent, not the agent. “Specialised task” is optional: a general coding agent is still an agent. Your “decision-making loop” was the right instinct. What it needed was <em>feedback</em> (the model sees what happened) and <em>stopping</em> (the model says when it's done). Chapter 03 turns this sentence into a list of minimum parts.</p>
+  </div>
+
+  <h2 id="when-not" data-short="When not to build an agent">When not to build an agent</h2>
+  <p>The single most repeated piece of advice in Schluntz and Zhang is to start with the simplest thing: “finding the simplest solution possible, and only increasing complexity when needed.” For many applications that's one well-prompted call with retrieval and good examples. Move right on the spectrum only when you can show that the simpler version fails, and say <em>how</em> it fails.</p>
+
+  <div class="table-wrap">
+    <table class="compact">
+      <thead><tr><th>If this is true…</th><th>…lean towards</th><th>Because</th></tr></thead>
+      <tbody>
+        <tr><td>You can write the steps down before the run</td><td>chaining</td><td>fixed steps are cheaper to test and run</td></tr>
+        <tr><td>Inputs fall into a few known kinds</td><td>routing</td><td>one cheap decision, then specialized paths</td></tr>
+        <tr><td>Subtasks are independent and known</td><td>sectioning</td><td>parallel speed without model-chosen structure</td></tr>
+        <tr><td>Subtasks depend on the input, but one plan is enough</td><td>orchestrator-workers</td><td>model-chosen structure, still a bounded pipeline</td></tr>
+        <tr><td>There's a clear grader and revision helps</td><td>evaluator-optimizer</td><td>a loop with a fixed shape and a round limit</td></tr>
+        <tr><td>The steps depend on what earlier steps find, and the environment gives honest feedback</td><td><strong>agent</strong></td><td>only an agent can change course mid-task</td></tr>
+        <tr><td>There's no way to check progress (no tests, no ground truth)</td><td>workflow, or an agent with a human checking</td><td>an agent without feedback will report success anyway</td></tr>
+        <tr><td>Mistakes are expensive or can't be undone</td><td>workflow, or an agent with approval gates</td><td>every free choice is a chance to do the wrong thing</td></tr>
+        <tr><td>Each request needs a tight, predictable cost or latency</td><td>single call or workflow</td><td>agent cost is a distribution with a long tail</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Two more pieces of advice from practice:</p>
+  <ul>
+    <li><strong>Measure against a simple baseline.</strong> Kapoor et al. (2024) found that on a well-known coding benchmark, simple baselines (such as retrying the same model, or escalating to a stronger one) matched complex agent designs at a fraction of the cost. Their point: report cost alongside accuracy, or the comparison is meaningless.</li>
+    <li><strong>Be careful with frameworks early.</strong> They make it quick to start but can hide the actual prompts and responses behind abstractions, which makes failures harder to debug. Schluntz and Zhang suggest starting with direct API calls, because most patterns are a few dozen lines of code. That's also the premise of your project.</li>
+  </ul>
+
+  <div class="box pitfall">
+    <span class="box-label">Mistakes to avoid</span>
+    <ul>
+      <li><strong>“It has a loop, so it's an agent.”</strong> An evaluator-optimizer loop is a workflow. What matters is who picks the <em>kind</em> of next step.</li>
+      <li><strong>“It uses tools, so it's an agent.”</strong> A chain whose step 2 always calls <code>search</code> is a workflow with a tool in it.</li>
+      <li><strong>Building an agent where a router would do.</strong> You pay for flexibility you never use, and you gain new failure modes.</li>
+      <li><strong>Trusting an orchestrator's plan without checking it.</strong> The plan is model output. Validate it (Chapter 01, Figure 1.4) before you spend money on workers.</li>
+      <li><strong>Treating votes as independent.</strong> The same prompt to the same model fails in correlated ways. Voting reduces random errors, not systematic ones.</li>
+      <li><strong>Leaving out the round or step limit</strong> because “the model will stop when it's done.” Sometimes it won't.</li>
+    </ul>
+  </div>
+
+  <div class="box project">
+    <span class="box-label">In your swarm harness</span>
+    <ul>
+      <li><strong>Stages 1–3</strong> have no LLM at all, on purpose (principle 2.9, deterministic before non-deterministic). Where on Figure 2.8 does a scripted fake model put your harness, and what does that let you test that a real model wouldn't?</li>
+      <li><strong>Stage 4.</strong> Which pattern from this chapter is your Stage 4? Where is its gate? Which column of the pattern table does your plan validator protect?</li>
+      <li><strong>Stage 5</strong> is where your harness crosses the agent line. Before you write it, name the exact lines of code that move from your runner into the model's hands. What new limit has to exist the moment they move?</li>
+      <li><strong>Experiment 001.</strong> What's the simplest workflow that could do the same task as your swarm? If the swarm doesn't beat it on quality <em>per unit of cost</em>, what have you learned, and is that a failed experiment?</li>
+      <li><strong>Design question.</strong> Should the root agent be allowed to choose a pattern per task (answer directly, route, or fan out)? If yes, what would you validate before acting on its choice?</li>
+    </ul>
+  </div>
+
+  <h2 id="check">Check yourself</h2>
+  <p>Answer each one out loud or on paper before you open it.</p>
+  <div class="quiz">
+    <details>
+      <summary><span class="tag recall">Recall</span> In one sentence, what separates a workflow from an agent?</summary>
+      <div><p>Who decides the next step. In a workflow, code fixes the steps and their order before the run. In an agent, the model chooses each next action after seeing the result of the last one, and decides when it's done, within limits that code enforces.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag recall">Recall</span> Sectioning and orchestrator-workers both fan out to parallel LLM calls. What's the difference?</summary>
+      <div><p>In sectioning, the list of subtasks is written in code (“check facts, check tone, check policy”). In orchestrator-workers, an LLM writes the list at run time, so the number and content of subtasks change per input. Both are still workflows: plan once, run, merge.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> Place each on the spectrum: (1) extract fields from an invoice into JSON; (2) generate SQL, run it, and on an error send the error back to the model to fix, up to 3 times; (3) a model with a shell that fixes a failing test in a repo it's never seen.</summary>
+      <div><p>(1) Single call, maybe with a validation gate. (2) An evaluator-optimizer loop with the database as the evaluator. It's a workflow: the only choice the model gets is how to fix the query, never what kind of step to take next. (3) An agent. The steps depend on what it finds, the tests give honest feedback, and it decides when it's done.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag apply">Apply</span> What's the smallest change that turns example (b) into an agent?</summary>
+      <div><p>Expose the handlers as tools. Send each handler's result back to the model, and let the model choose another action or finish. Add a step limit in code. Those changes add feedback, repeated decisions and model-decided stopping. Without the step limit, it's an agent with no brakes.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag design">Design</span> A support bot handles FAQs (80% of traffic) and refunds (20%, which need order lookup and a policy check). Sketch the design.</summary>
+      <div><p>A router first. FAQs go to a single call with retrieval on a small model. Refunds go down a workflow: look up the order, then a policy check in code, then a draft reply. Agent behaviour is justified only if refunds really need open-ended investigation, and even then the action that moves money should need approval. The design follows the traffic: the cheap path serves the most requests.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “When would you <em>not</em> use an agent?”</summary>
+      <div><p>When the steps are known in advance; when there's no honest feedback signal; when errors are costly or irreversible; when cost or latency must be predictable per request; when a simple baseline already works. Then say what you'd do instead (the matching workflow pattern) and how you'd find out you need more: measure the simpler version's failures first.</p></div>
+    </details>
+    <details>
+      <summary><span class="tag interview">Interview</span> “Is orchestrator-workers an agent?”</summary>
+      <div><p>As usually described, no. The orchestrator plans once, the pipeline (plan, then workers, then merge) is fixed, and nothing loops back. It becomes agentic when the orchestrator sees the workers' results and decides what to do next: re-plan, spawn more work, or finish, in a loop. That's the step from your Stage 4 to Stage 5, and it's worth saying so explicitly.</p></div>
+    </details>
+  </div>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><strong>Erik Schluntz and Barry Zhang, “Building effective agents”</strong> (Anthropic engineering blog, 2024).<span class="why">The source for the workflow/agent split, the augmented LLM and the five patterns. Your Round 2 reading. Read it before or after this chapter, but read it.</span></li>
+    <li><strong>Anthropic, “How we built our multi-agent research system”</strong> (Anthropic engineering blog, 2025).<span class="why">An orchestrator that does loop and re-plan, in production. The bridge from this chapter to Part 4.</span></li>
+    <li><strong>Sayash Kapoor et al., “AI Agents That Matter”</strong> (2024).<span class="why">Agentic-ness as a spectrum, cost-controlled evaluation, and why simple baselines often win.</span></li>
+    <li><strong>Xuezhi Wang et al., “Self-Consistency Improves Chain of Thought Reasoning in Language Models”</strong> (ICLR, 2023).<span class="why">The research behind voting: sample several reasoning paths, take the majority answer.</span></li>
+    <li><strong>Aman Madaan et al., “Self-Refine: Iterative Refinement with Self-Feedback”</strong> (NeurIPS, 2023).<span class="why">The evaluator-optimizer loop with one model playing both roles, and where it stops helping.</span></li>
+    <li><strong>Chip Huyen, <em>AI Engineering</em></strong> (O'Reilly, 2025).<span class="why">The chapter on agents gives a second, independent take on planning, tools and failure modes.</span></li>
+  </ul>
+
+  <section class="recall-card" aria-labelledby="recall-02">
+    <h2 id="recall-02" data-short="Recall card">Recall card</h2>
+    <p class="muted small">Five lines to rehearse. If you can expand each into a minute of explanation, you know this chapter.</p>
+    <ol>
+      <li>The sorting question is who owns the control flow: code (workflow) or the model (agent).</li>
+      <li>Everything is built from the augmented LLM: one call, plus retrieval, tools and memory.</li>
+      <li>Five workflows: chaining, routing, parallelization (sectioning, voting), orchestrator-workers, evaluator-optimizer.</li>
+      <li>The agent line: the model chooses the next action, sees its result, and decides when it's done, in a loop bounded by code.</li>
+      <li>Start simple. Move right on the spectrum only when you can show how the simpler design fails.</li>
+    </ol>
+  </section>
+
+  <div class="done">
+    <input type="checkbox" id="done-toggle" data-chapter="02">
+    <label for="done-toggle">I can explain this chapter without notes<small>Saved in this browser only. It updates the count on the guide's home page.</small></label>
+  </div>
+
+  <nav class="pager" aria-label="Chapter navigation">
+    <a class="prev" href="01-llm-as-a-component.html"><small>Previous · Chapter 01</small>The LLM as a component</a>
+    <a class="next" href="03-agent-loop.html"><small>Next · Chapter 03</small>The agent loop</a>
+  </nav>
+</main>
+<aside class="toc-rail" aria-label="On this page"><p class="toc-title">In this chapter</p><nav data-toc></nav></aside>
+</div>
+</body>
+</html>
